@@ -1,0 +1,42 @@
+@import "tailwindcss";
+@custom-variant dark (&:where(.dark, .dark *));
+
+@layer base {
+  :root {
+    color-scheme: light;
+  }
+
+  html.dark {
+    color-scheme: dark;
+  }
+
+  body {
+    background-color: #F9F7F2;
+    color: #1A1A1A;
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, sans-serif;
+  }
+
+  .dark body {
+    background-color: #181816;
+    color: #ECE9E2;
+  }
+
+  ::selection {
+    background: #EBE8E0;
+    color: #1A1A1A;
+  }
+
+  .dark ::selection {
+    background: #3A3A36;
+    color: #ECE9E2;
+  }
+}
+
+.serif {
+  font-family: "Libre Baskerville", "Georgia", serif;
+}
+
+.prose p {
+  margin-bottom: 1.5rem;
+}
+

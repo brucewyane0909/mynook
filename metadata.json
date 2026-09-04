@@ -1,0 +1,6 @@
+{
+  "name": "MYNOOK",
+  "description": "A beautiful online book-writing and book-project management workspace with distraction-free editor, real-time sync, Cloudinary cover uploads, and PDF export.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
