@@ -71,11 +71,23 @@ export async function fetchBooks(): Promise<Book[]> {
 }
 
 export async function createBookInFirestore(
-  bookData: Omit<Book, 'id' | 'createdAt' | 'updatedAt' | 'pageCount'>
+  bookData: Omit<Book, 'id' | 'createdAt' | 'updatedAt' | 'pageCount'> & {
+    initialChapters?: { title: string; content?: string }[];
+  }
 ): Promise<Book> {
   const user = getCurrentUser();
   const bookId = 'book_' + Date.now() + '_' + Math.random().toString(36).substring(2, 9);
   const now = Date.now();
+
+  const chapters =
+    bookData.initialChapters && bookData.initialChapters.length > 0
+      ? bookData.initialChapters
+      : [
+          {
+            title: 'Chapter 1: The Beginning',
+            content: '<p>Every great story begins with a single word...</p>',
+          },
+        ];
 
   const newBook: Book = {
     id: bookId,
@@ -86,14 +98,31 @@ export async function createBookInFirestore(
     backCoverUrl: bookData.backCoverUrl || '',
     createdAt: now,
     updatedAt: now,
-    pageCount: 1,
+    pageCount: chapters.length,
     ownerId: user ? user.uid : 'author',
     genre: bookData.genre || '',
+    templateId: bookData.templateId,
   };
 
   // Update local cache optimistically
   const cached = getCachedBooks();
   setCachedBooks([newBook, ...cached]);
+
+  // Pre-seed local storage pages cache for instant offline responsiveness
+  const localPages: BookPage[] = chapters.map((ch, idx) => ({
+    id: `page_${now}_${idx}_${Math.random().toString(36).substring(2, 6)}`,
+    bookId,
+    title: ch.title,
+    content: ch.content || '<p></p>',
+    pageNumber: idx + 1,
+    createdAt: now,
+    updatedAt: now,
+  }));
+  try {
+    localStorage.setItem(LOCAL_STORAGE_PAGES_PREFIX + bookId, JSON.stringify(localPages));
+  } catch (e) {
+    console.warn('Failed to pre-cache template pages locally:', e);
+  }
 
   try {
     const bookDocRef = doc(firestore, 'books', bookId);
@@ -103,18 +132,19 @@ export async function createBookInFirestore(
       updatedAt: serverTimestamp(),
     });
 
-    // Create initial page for this book
-    const initialPageId = 'page_' + Date.now() + '_' + Math.random().toString(36).substring(2, 7);
-    const initialPageDocRef = doc(firestore, 'books', bookId, 'pages', initialPageId);
-    await setDoc(initialPageDocRef, {
-      id: initialPageId,
-      bookId,
-      title: 'Chapter 1: The Beginning',
-      content: '<p>Every great story begins with a single word...</p>',
-      pageNumber: 1,
-      createdAt: serverTimestamp(),
-      updatedAt: serverTimestamp(),
-    });
+    // Create initial pages for this book in Firestore subcollection
+    for (const page of localPages) {
+      const pageDocRef = doc(firestore, 'books', bookId, 'pages', page.id);
+      await setDoc(pageDocRef, {
+        id: page.id,
+        bookId,
+        title: page.title,
+        content: page.content,
+        pageNumber: page.pageNumber,
+        createdAt: serverTimestamp(),
+        updatedAt: serverTimestamp(),
+      });
+    }
   } catch (err) {
     console.warn('Error persisting new book to Firestore:', err);
   }

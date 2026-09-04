@@ -16,6 +16,8 @@ import {
 } from './services/storage';
 import { initAuth } from './services/firebase';
 import { exportBookToPdf } from './services/pdfExport';
+import { exportBookToEpub } from './services/epubExport';
+import { ExportFormat } from './types';
 
 export default function App() {
   // Theme state
@@ -51,8 +53,9 @@ export default function App() {
   const [bookToDelete, setBookToDelete] = useState<Book | null>(null);
   const [isSettingsOpen, setIsSettingsOpen] = useState(false);
 
-  // PDF Export Modal State
+  // Export Modal State (PDF & EPUB)
   const [isExporting, setIsExporting] = useState(false);
+  const [exportFormat, setExportFormat] = useState<ExportFormat>('pdf');
   const [exportStatus, setExportStatus] = useState('');
   const [exportCompleted, setExportCompleted] = useState(false);
   const [exportError, setExportError] = useState<string | null>(null);
@@ -88,6 +91,8 @@ export default function App() {
     frontCoverUrl: string;
     backCoverUrl: string;
     genre: string;
+    templateId?: string;
+    initialChapters?: { title: string; content?: string }[];
   }) => {
     if (editingBook) {
       // Update existing book
@@ -122,6 +127,7 @@ export default function App() {
 
   // 4. Export Book to PDF
   const handleExportPdf = async (book: Book, preloadedPages?: BookPage[]) => {
+    setExportFormat('pdf');
     setIsExporting(true);
     setExportCompleted(false);
     setExportError(null);
@@ -137,6 +143,27 @@ export default function App() {
     } catch (err: any) {
       console.error('PDF Export Error:', err);
       setExportError(err.message || 'Unable to generate PDF book. Please try again.');
+    }
+  };
+
+  // 5. Export Book to EPUB
+  const handleExportEpub = async (book: Book, preloadedPages?: BookPage[]) => {
+    setExportFormat('epub');
+    setIsExporting(true);
+    setExportCompleted(false);
+    setExportError(null);
+    setExportingBookTitle(book.title);
+    setExportStatus('Fetching book chapters for EPUB package...');
+
+    try {
+      const pages = preloadedPages || (await fetchPagesForBook(book.id));
+      await exportBookToEpub(book, pages, (status) => {
+        setExportStatus(status);
+      });
+      setExportCompleted(true);
+    } catch (err: any) {
+      console.error('EPUB Export Error:', err);
+      setExportError(err.message || 'Unable to generate EPUB ebook. Please try again.');
     }
   };
 
@@ -160,6 +187,7 @@ export default function App() {
             book={activeBook}
             onBackToDashboard={() => setActiveBook(null)}
             onExportPdf={(b, pages) => handleExportPdf(b, pages)}
+            onExportEpub={(b, pages) => handleExportEpub(b, pages)}
           />
         ) : (
           <Dashboard
@@ -176,6 +204,7 @@ export default function App() {
             }}
             onDeleteBook={handleDeleteBook}
             onExportPdf={(book) => handleExportPdf(book)}
+            onExportEpub={(book) => handleExportEpub(book)}
             isLoading={isLoadingBooks}
           />
         )}
@@ -208,7 +237,7 @@ export default function App() {
         onToggleTheme={toggleTheme}
       />
 
-      {/* PDF Export Progress Modal */}
+      {/* Export Progress Modal (PDF & EPUB) */}
       <ExportModal
         isOpen={isExporting}
         onClose={() => setIsExporting(false)}
@@ -216,6 +245,7 @@ export default function App() {
         isCompleted={exportCompleted}
         error={exportError}
         bookTitle={exportingBookTitle}
+        format={exportFormat}
       />
     </div>
   );

@@ -50,19 +50,19 @@ export const DeleteBookModal: React.FC<DeleteBookModalProps> = ({
   return (
     <div
       id="delete-book-modal-backdrop"
-      className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-xs"
+      className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-4 bg-black/60 backdrop-blur-xs overflow-y-auto"
     >
       <div
         id="delete-book-modal-card"
-        className="w-full max-w-md bg-[#F9F7F2] dark:bg-[#21211E] rounded-sm shadow-2xl border border-[#E5E1D8] dark:border-[#2E2E2A] overflow-hidden"
+        className="w-full max-w-md bg-[#F9F7F2] dark:bg-[#21211E] rounded-sm shadow-2xl border border-[#E5E1D8] dark:border-[#2E2E2A] overflow-hidden my-auto"
       >
         {/* Header */}
-        <div className="flex items-center justify-between px-6 py-4 border-b border-[#E5E1D8] dark:border-[#2E2E2A]">
-          <div className="flex items-center gap-2.5">
-            <div className="w-8 h-8 rounded-sm bg-red-100 dark:bg-red-950/50 text-red-600 dark:text-red-400 flex items-center justify-center">
+        <div className="flex items-center justify-between px-4 sm:px-6 py-3.5 sm:py-4 border-b border-[#E5E1D8] dark:border-[#2E2E2A]">
+          <div className="flex items-center gap-2 sm:gap-2.5 min-w-0">
+            <div className="w-7 h-7 sm:w-8 sm:h-8 rounded-sm bg-red-100 dark:bg-red-950/50 text-red-600 dark:text-red-400 flex items-center justify-center shrink-0">
               <Trash2 className="w-4 h-4" />
             </div>
-            <h2 className="text-base serif italic font-bold text-[#1A1A1A] dark:text-[#ECE9E2]">
+            <h2 className="text-base serif italic font-bold text-[#1A1A1A] dark:text-[#ECE9E2] truncate">
               Delete Book Project
             </h2>
           </div>
@@ -70,14 +70,14 @@ export const DeleteBookModal: React.FC<DeleteBookModalProps> = ({
             id="close-delete-modal-btn"
             onClick={handleModalClose}
             disabled={isDeleting}
-            className="p-1.5 rounded-sm text-[#8A8882] hover:text-[#1A1A1A] dark:hover:text-[#ECE9E2] hover:bg-[#EBE8E0] dark:hover:bg-[#282824] transition-colors disabled:opacity-50"
+            className="p-2 sm:p-1.5 min-w-[36px] min-h-[36px] flex items-center justify-center rounded-sm text-[#8A8882] hover:text-[#1A1A1A] dark:hover:text-[#ECE9E2] hover:bg-[#EBE8E0] dark:hover:bg-[#282824] transition-colors disabled:opacity-50 cursor-pointer"
           >
             <X className="w-4 h-4" />
           </button>
         </div>
 
         {/* Content */}
-        <div className="p-6 space-y-4">
+        <div className="p-4 sm:p-6 space-y-4">
           {isDeleted ? (
             <div className="py-6 flex flex-col items-center justify-center text-center space-y-2">
               <CheckCircle2 className="w-10 h-10 text-emerald-600 dark:text-emerald-400" />
@@ -106,13 +106,13 @@ export const DeleteBookModal: React.FC<DeleteBookModalProps> = ({
                 </div>
               )}
 
-              <div className="pt-2 flex items-center justify-end gap-2.5">
+              <div className="pt-2 flex flex-col-reverse sm:flex-row items-stretch sm:items-center justify-end gap-2 sm:gap-2.5">
                 <button
                   type="button"
                   id="cancel-delete-book-btn"
                   onClick={handleModalClose}
                   disabled={isDeleting}
-                  className="px-4 py-2 rounded-sm text-xs font-bold uppercase tracking-wider text-[#6B6964] dark:text-[#A8A59E] hover:bg-[#EBE8E0] dark:hover:bg-[#282824] transition-colors disabled:opacity-50"
+                  className="w-full sm:w-auto px-4 py-2.5 sm:py-2 min-h-[40px] sm:min-h-0 rounded-sm text-xs font-bold uppercase tracking-wider text-[#6B6964] dark:text-[#A8A59E] hover:bg-[#EBE8E0] dark:hover:bg-[#282824] transition-colors disabled:opacity-50 text-center cursor-pointer"
                 >
                   Cancel
                 </button>
@@ -121,7 +121,7 @@ export const DeleteBookModal: React.FC<DeleteBookModalProps> = ({
                   id="confirm-delete-book-btn"
                   onClick={handleDelete}
                   disabled={isDeleting}
-                  className="px-4 py-2 rounded-sm text-xs font-bold uppercase tracking-wider bg-red-600 hover:bg-red-700 text-white flex items-center gap-1.5 transition-colors shadow-xs disabled:opacity-50"
+                  className="w-full sm:w-auto px-4 py-2.5 sm:py-2 min-h-[42px] sm:min-h-0 rounded-sm text-xs font-bold uppercase tracking-wider bg-red-600 hover:bg-red-700 text-white flex items-center justify-center gap-1.5 transition-colors shadow-xs disabled:opacity-50 cursor-pointer"
                 >
                   {isDeleting ? (
                     <>

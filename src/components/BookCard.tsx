@@ -8,6 +8,7 @@ interface BookCardProps {
   onEditBook: (book: Book) => void;
   onDeleteBook: (book: Book) => void;
   onExportPdf: (book: Book) => void;
+  onExportEpub?: (book: Book) => void;
 }
 
 export const BookCard: React.FC<BookCardProps> = ({
@@ -16,6 +17,7 @@ export const BookCard: React.FC<BookCardProps> = ({
   onEditBook,
   onDeleteBook,
   onExportPdf,
+  onExportEpub,
 }) => {
   const [isMenuOpen, setIsMenuOpen] = useState(false);
   const menuRef = useRef<HTMLDivElement>(null);
@@ -95,13 +97,13 @@ export const BookCard: React.FC<BookCardProps> = ({
               setIsMenuOpen(!isMenuOpen);
             }}
             aria-label="Book Options"
-            className="p-1.5 rounded-full bg-white/90 dark:bg-[#21211E]/90 backdrop-blur-md text-[#5A5852] dark:text-[#A8A59E] hover:text-[#1A1A1A] dark:hover:text-[#ECE9E2] shadow-sm transition-colors border border-[#E5E1D8] dark:border-[#2E2E2A]"
+            className="p-2 sm:p-1.5 min-w-[36px] min-h-[36px] flex items-center justify-center rounded-full bg-white/95 dark:bg-[#21211E]/95 backdrop-blur-md text-[#5A5852] dark:text-[#A8A59E] hover:text-[#1A1A1A] dark:hover:text-[#ECE9E2] shadow-sm transition-colors border border-[#E5E1D8] dark:border-[#2E2E2A] cursor-pointer"
           >
-            <MoreVertical className="w-3.5 h-3.5" />
+            <MoreVertical className="w-4 h-4 sm:w-3.5 sm:h-3.5" />
           </button>
 
           {isMenuOpen && (
-            <div className="absolute right-0 mt-1 w-44 rounded-sm bg-[#F9F7F2] dark:bg-[#21211E] border border-[#E5E1D8] dark:border-[#2E2E2A] shadow-xl py-1 z-20 animate-in fade-in zoom-in-95 duration-100">
+            <div className="absolute right-0 mt-1.5 w-48 rounded-sm bg-[#F9F7F2] dark:bg-[#21211E] border border-[#E5E1D8] dark:border-[#2E2E2A] shadow-xl py-1 z-30 animate-in fade-in zoom-in-95 duration-100">
               <button
                 id={`edit-book-btn-${book.id}`}
                 onClick={(e) => {
@@ -109,10 +111,10 @@ export const BookCard: React.FC<BookCardProps> = ({
                   setIsMenuOpen(false);
                   onEditBook(book);
                 }}
-                className="w-full px-3.5 py-2 text-left text-xs font-medium text-[#3A3A36] dark:text-[#ECE9E2] hover:bg-[#EBE8E0] dark:hover:bg-[#2D2D29] flex items-center gap-2 font-sans"
+                className="w-full px-3.5 py-2.5 sm:py-2 text-left text-xs font-medium text-[#3A3A36] dark:text-[#ECE9E2] hover:bg-[#EBE8E0] dark:hover:bg-[#2D2D29] flex items-center gap-2.5 font-sans cursor-pointer"
               >
                 <Edit3 className="w-3.5 h-3.5 text-[#8A8882]" />
-                Edit Details & Covers
+                <span>Edit Details & Covers</span>
               </button>
               <button
                 id={`export-pdf-btn-${book.id}`}
@@ -121,11 +123,25 @@ export const BookCard: React.FC<BookCardProps> = ({
                   setIsMenuOpen(false);
                   onExportPdf(book);
                 }}
-                className="w-full px-3.5 py-2 text-left text-xs font-medium text-[#3A3A36] dark:text-[#ECE9E2] hover:bg-[#EBE8E0] dark:hover:bg-[#2D2D29] flex items-center gap-2 font-sans"
+                className="w-full px-3.5 py-2.5 sm:py-2 text-left text-xs font-medium text-[#3A3A36] dark:text-[#ECE9E2] hover:bg-[#EBE8E0] dark:hover:bg-[#2D2D29] flex items-center gap-2.5 font-sans cursor-pointer"
               >
                 <Download className="w-3.5 h-3.5 text-[#3A3A36] dark:text-[#ECE9E2]" />
-                Export Book to PDF
+                <span>Export Book to PDF</span>
               </button>
+              {onExportEpub && (
+                <button
+                  id={`export-epub-btn-${book.id}`}
+                  onClick={(e) => {
+                    e.stopPropagation();
+                    setIsMenuOpen(false);
+                    onExportEpub(book);
+                  }}
+                  className="w-full px-3.5 py-2.5 sm:py-2 text-left text-xs font-medium text-[#3A3A36] dark:text-[#ECE9E2] hover:bg-[#EBE8E0] dark:hover:bg-[#2D2D29] flex items-center gap-2.5 font-sans cursor-pointer"
+                >
+                  <Download className="w-3.5 h-3.5 text-[#C5A059]" />
+                  <span>Export Book to EPUB</span>
+                </button>
+              )}
               <div className="my-1 border-t border-[#E5E1D8] dark:border-[#2E2E2A]" />
               <button
                 id={`delete-book-btn-${book.id}`}
@@ -134,10 +150,10 @@ export const BookCard: React.FC<BookCardProps> = ({
                   setIsMenuOpen(false);
                   onDeleteBook(book);
                 }}
-                className="w-full px-3.5 py-2 text-left text-xs font-medium text-red-600 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-950/40 flex items-center gap-2 font-sans"
+                className="w-full px-3.5 py-2.5 sm:py-2 text-left text-xs font-medium text-red-600 dark:text-red-400 hover:bg-red-50 dark:hover:bg-red-950/40 flex items-center gap-2.5 font-sans cursor-pointer"
               >
                 <Trash2 className="w-3.5 h-3.5" />
-                Delete Book
+                <span>Delete Book</span>
               </button>
             </div>
           )}
@@ -182,9 +198,9 @@ export const BookCard: React.FC<BookCardProps> = ({
           <button
             id={`continue-writing-btn-${book.id}`}
             onClick={() => onOpenBook(book)}
-            className="w-full py-2 px-3 rounded-sm text-[10px] font-bold uppercase tracking-widest bg-[#EBE8E0] hover:bg-[#3A3A36] hover:text-white dark:bg-[#282824] dark:hover:bg-[#ECE9E2] dark:hover:text-[#1A1A1A] text-[#3A3A36] dark:text-[#ECE9E2] transition-all duration-200 flex items-center justify-center gap-2 group-hover:bg-[#3A3A36] group-hover:text-white dark:group-hover:bg-[#ECE9E2] dark:group-hover:text-[#1A1A1A]"
+            className="w-full py-2.5 sm:py-2 px-3 min-h-[40px] rounded-sm text-[10px] font-bold uppercase tracking-widest bg-[#EBE8E0] hover:bg-[#3A3A36] hover:text-white dark:bg-[#282824] dark:hover:bg-[#ECE9E2] dark:hover:text-[#1A1A1A] text-[#3A3A36] dark:text-[#ECE9E2] transition-all duration-200 flex items-center justify-center gap-2 group-hover:bg-[#3A3A36] group-hover:text-white dark:group-hover:bg-[#ECE9E2] dark:group-hover:text-[#1A1A1A] cursor-pointer"
           >
-            <BookOpen className="w-3 h-3" />
+            <BookOpen className="w-3.5 h-3.5" />
             <span>Open Manuscript</span>
           </button>
         </div>

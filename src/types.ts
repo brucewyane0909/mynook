@@ -12,7 +12,10 @@ export interface Book {
   pageCount: number;
   ownerId?: string;
   genre?: string;
+  templateId?: string;
 }
+
+export type ExportFormat = 'pdf' | 'epub';
 
 export interface BookPage {
   id: string;

@@ -3,6 +3,7 @@ import {
   ArrowLeft,
   ChevronLeft,
   ChevronRight,
+  ChevronDown,
   Plus,
   Trash2,
   Bold,
@@ -32,6 +33,8 @@ import {
   X,
   Type,
   AlertTriangle,
+  FileText,
+  BookOpen,
 } from 'lucide-react';
 import { Book, BookPage, SyncStatus, EditorFont, EditorFontSize } from '../types';
 import {
@@ -48,12 +51,14 @@ interface BookEditorProps {
   book: Book;
   onBackToDashboard: () => void;
   onExportPdf: (book: Book, pages: BookPage[]) => void;
+  onExportEpub?: (book: Book, pages: BookPage[]) => void;
 }
 
 export const BookEditor: React.FC<BookEditorProps> = ({
   book,
   onBackToDashboard,
   onExportPdf,
+  onExportEpub,
 }) => {
   // Navigation & Page State
   const [pages, setPages] = useState<BookPage[]>([]);
@@ -61,6 +66,9 @@ export const BookEditor: React.FC<BookEditorProps> = ({
   const [isLoadingPages, setIsLoadingPages] = useState(true);
   const [isSidebarOpen, setIsSidebarOpen] = useState(true);
   const [isFullscreen, setIsFullscreen] = useState(false);
+  const [isFocusMode, setIsFocusMode] = useState(false);
+  const [isExportMenuOpen, setIsExportMenuOpen] = useState(false);
+  const exportMenuRef = useRef<HTMLDivElement>(null);
 
   const activePageIndex = pages.findIndex((p) => p.id === currentPageId);
   const currentChapterNum = activePageIndex >= 0 ? activePageIndex + 1 : 1;
@@ -214,6 +222,30 @@ export const BookEditor: React.FC<BookEditorProps> = ({
       flushCurrentWriting();
     };
   }, [flushCurrentWriting]);
+
+  // Handle ESC key to exit Focus Mode
+  useEffect(() => {
+    const handleGlobalKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape' && isFocusMode) {
+        setIsFocusMode(false);
+      }
+    };
+    window.addEventListener('keydown', handleGlobalKeyDown);
+    return () => window.removeEventListener('keydown', handleGlobalKeyDown);
+  }, [isFocusMode]);
+
+  // Handle outside click for Export dropdown menu
+  useEffect(() => {
+    const handleClickOutside = (e: MouseEvent) => {
+      if (exportMenuRef.current && !exportMenuRef.current.contains(e.target as Node)) {
+        setIsExportMenuOpen(false);
+      }
+    };
+    if (isExportMenuOpen) {
+      document.addEventListener('mousedown', handleClickOutside);
+    }
+    return () => document.removeEventListener('mousedown', handleClickOutside);
+  }, [isExportMenuOpen]);
 
   // 3. Debounced Synchronization Architecture (RTDB: 500ms, Firestore: 1500ms)
   const scheduleSync = (newTitle: string, newContent: string) => {
@@ -499,6 +531,14 @@ export const BookEditor: React.FC<BookEditorProps> = ({
     }
   };
 
+  // Helper to select page and auto-close sidebar on mobile
+  const handleSelectPageWithMobileClose = async (page: BookPage) => {
+    await handleSelectPage(page);
+    if (typeof window !== 'undefined' && window.innerWidth < 768) {
+      setIsSidebarOpen(false);
+    }
+  };
+
   // Typography font class
   const fontClass =
     editorFont === 'serif'
@@ -507,29 +547,29 @@ export const BookEditor: React.FC<BookEditorProps> = ({
 
   // Font size class
   const fontSizeClass = {
-    sm: 'text-base leading-relaxed',
-    md: 'text-lg leading-loose',
-    lg: 'text-xl leading-loose',
-    xl: 'text-2xl leading-loose',
+    sm: 'text-sm sm:text-base leading-relaxed',
+    md: 'text-base sm:text-lg leading-loose',
+    lg: 'text-lg sm:text-xl leading-loose',
+    xl: 'text-xl sm:text-2xl leading-loose',
   }[editorFontSize];
 
   return (
     <div
       id="book-editor-container"
       className={`h-[calc(100vh-64px)] w-full flex flex-col bg-[#F9F7F2] dark:bg-[#181816] text-[#1A1A1A] dark:text-[#ECE9E2] overflow-hidden ${
-        isFullscreen ? 'fixed inset-0 z-50 h-screen' : ''
+        isFullscreen || isFocusMode ? 'fixed inset-0 z-50 h-screen' : ''
       }`}
     >
       {/* Recovery Banner if unsaved state restored */}
       {recoveryNotice && (
-        <div className="bg-[#EBE8E0] dark:bg-[#282824] border-b border-[#DCD8CF] dark:border-[#383834] text-[#3A3A36] dark:text-[#ECE9E2] text-xs px-4 py-2 flex items-center justify-between animate-in fade-in duration-200 font-sans">
-          <div className="flex items-center gap-2">
+        <div className="bg-[#EBE8E0] dark:bg-[#282824] border-b border-[#DCD8CF] dark:border-[#383834] text-[#3A3A36] dark:text-[#ECE9E2] text-xs px-3 sm:px-4 py-2 flex items-center justify-between animate-in fade-in duration-200 font-sans shrink-0">
+          <div className="flex items-center gap-2 min-w-0">
             <Sparkles className="w-4 h-4 text-[#3A3A36] dark:text-[#ECE9E2] flex-shrink-0" />
-            <span>{recoveryNotice}</span>
+            <span className="truncate">{recoveryNotice}</span>
           </div>
           <button
             onClick={() => setRecoveryNotice(null)}
-            className="p-1 hover:bg-[#DCD8CF] dark:hover:bg-[#383834] rounded"
+            className="p-1 hover:bg-[#DCD8CF] dark:hover:bg-[#383834] rounded shrink-0 cursor-pointer"
           >
             <X className="w-3.5 h-3.5" />
           </button>
@@ -538,30 +578,50 @@ export const BookEditor: React.FC<BookEditorProps> = ({
 
       {/* Main Workspace Body: Left Sidebar + Editor */}
       <div className="flex-1 flex overflow-hidden relative">
+        {/* Mobile Backdrop for Sidebar Drawer */}
+        {!isFocusMode && isSidebarOpen && (
+          <div
+            id="mobile-sidebar-backdrop"
+            onClick={() => setIsSidebarOpen(false)}
+            className="fixed inset-0 bg-black/50 backdrop-blur-xs z-20 md:hidden transition-opacity animate-in fade-in duration-200"
+          />
+        )}
+
         {/* ==================== LEFT SIDEBAR ==================== */}
-        <aside
-          id="editor-sidebar"
-          className={`${
-            isSidebarOpen ? 'w-64 sm:w-72 translate-x-0' : 'w-0 -translate-x-full md:w-0'
-          } transition-all duration-300 ease-in-out border-r border-[#E5E1D8] dark:border-[#2E2E2A] bg-[#F3F0E9] dark:bg-[#1D1D1A] flex flex-col z-20 absolute md:relative h-full shadow-lg md:shadow-none`}
-        >
+        {!isFocusMode && (
+          <aside
+            id="editor-sidebar"
+            className={`${
+              isSidebarOpen ? 'w-72 max-w-[85vw] translate-x-0' : 'w-0 -translate-x-full md:w-0'
+            } transition-all duration-300 ease-in-out border-r border-[#E5E1D8] dark:border-[#2E2E2A] bg-[#F3F0E9] dark:bg-[#1D1D1A] flex flex-col z-30 absolute md:relative h-full shadow-2xl md:shadow-none shrink-0`}
+          >
           {/* Sidebar Top: Back button & Editorial Cover Card */}
-          <div className="p-5 border-b border-[#E5E1D8] dark:border-[#2E2E2A]">
-            <button
-              id="editor-back-btn"
-              onClick={async () => {
-                await flushCurrentWriting();
-                onBackToDashboard();
-              }}
-              className="flex items-center gap-2 text-xs font-medium uppercase tracking-widest text-[#8A8882] dark:text-[#9E9B95] hover:text-[#1A1A1A] dark:hover:text-[#ECE9E2] mb-4 transition-colors"
-            >
-              <ArrowLeft className="w-3.5 h-3.5" />
-              <span>Library</span>
-            </button>
+          <div className="p-4 sm:p-5 border-b border-[#E5E1D8] dark:border-[#2E2E2A] shrink-0">
+            <div className="flex items-center justify-between mb-3 sm:mb-4">
+              <button
+                id="editor-back-btn"
+                onClick={async () => {
+                  await flushCurrentWriting();
+                  onBackToDashboard();
+                }}
+                className="flex items-center gap-2 text-xs font-bold uppercase tracking-widest text-[#8A8882] dark:text-[#9E9B95] hover:text-[#1A1A1A] dark:hover:text-[#ECE9E2] transition-colors py-1 cursor-pointer"
+              >
+                <ArrowLeft className="w-4 h-4" />
+                <span>Library</span>
+              </button>
+              <button
+                id="close-sidebar-mobile-btn"
+                onClick={() => setIsSidebarOpen(false)}
+                className="p-1.5 rounded-sm text-[#8A8882] hover:text-[#1A1A1A] dark:hover:text-[#ECE9E2] md:hidden cursor-pointer"
+                title="Close drawer"
+              >
+                <X className="w-4 h-4" />
+              </button>
+            </div>
 
             {/* Editorial Book Jacket Preview in Sidebar */}
             <div className="relative group mb-3">
-              <div className="w-full aspect-[2/3] bg-[#E5E1D8] dark:bg-[#282824] rounded-sm shadow-sm flex items-center justify-center overflow-hidden border border-[#DCD8CF] dark:border-[#353530]">
+              <div className="w-full aspect-[2/3] max-h-48 sm:max-h-56 mx-auto bg-[#E5E1D8] dark:bg-[#282824] rounded-sm shadow-sm flex items-center justify-center overflow-hidden border border-[#DCD8CF] dark:border-[#353530]">
                 {book.frontCoverUrl ? (
                   <img
                     src={book.frontCoverUrl}
@@ -589,8 +649,8 @@ export const BookEditor: React.FC<BookEditorProps> = ({
           </div>
 
           {/* Chapters / Pages List */}
-          <div className="flex-1 overflow-y-auto p-4 space-y-1">
-            <div className="flex items-center justify-between mb-3 text-[10px] font-bold uppercase tracking-widest text-[#8A8882] dark:text-[#9E9B95]">
+          <div className="flex-1 overflow-y-auto p-3 sm:p-4 space-y-1">
+            <div className="flex items-center justify-between mb-2 text-[10px] font-bold uppercase tracking-widest text-[#8A8882] dark:text-[#9E9B95]">
               <span>Manuscript</span>
               <span className="font-mono">{pages.length}</span>
             </div>
@@ -606,8 +666,8 @@ export const BookEditor: React.FC<BookEditorProps> = ({
                   <div
                     key={page.id}
                     id={`sidebar-page-item-${page.id}`}
-                    onClick={() => handleSelectPage(page)}
-                    className={`group relative flex items-center justify-between py-2 px-3 rounded-sm cursor-pointer text-sm font-medium transition-all ${
+                    onClick={() => handleSelectPageWithMobileClose(page)}
+                    className={`group relative flex items-center justify-between py-2.5 px-3 rounded-sm cursor-pointer text-sm font-medium transition-all ${
                       isActive
                         ? 'bg-[#EBE8E0] dark:bg-[#2D2D29] border-l-2 border-[#3A3A36] dark:border-[#ECE9E2] text-[#1A1A1A] dark:text-[#ECE9E2]'
                         : 'text-[#5A5852] dark:text-[#A8A59E] hover:bg-[#EBE8E0]/70 dark:hover:bg-[#252521]'
@@ -615,7 +675,7 @@ export const BookEditor: React.FC<BookEditorProps> = ({
                   >
                     <div className="flex items-center gap-2.5 min-w-0 flex-1 pr-2">
                       <span
-                        className={`w-5 text-[10px] font-mono ${
+                        className={`w-5 text-[10px] font-mono shrink-0 ${
                           isActive ? 'text-[#3A3A36] dark:text-[#ECE9E2] font-bold' : 'text-[#8A8882] dark:text-[#9E9B95]'
                         }`}
                       >
@@ -628,8 +688,8 @@ export const BookEditor: React.FC<BookEditorProps> = ({
 
                     {/* Page Action Controls (Move & Delete) */}
                     <div
-                      className={`flex items-center gap-1 ${
-                        isActive ? 'opacity-100' : 'opacity-0 group-hover:opacity-100'
+                      className={`flex items-center gap-1 shrink-0 ${
+                        isActive ? 'opacity-100' : 'opacity-0 group-hover:opacity-100 focus-within:opacity-100'
                       } transition-opacity`}
                       onClick={(e) => e.stopPropagation()}
                     >
@@ -638,27 +698,27 @@ export const BookEditor: React.FC<BookEditorProps> = ({
                         onClick={() => handleMovePage(index, 'up')}
                         disabled={index === 0}
                         title="Move Page Up"
-                        className="p-1 rounded hover:bg-[#DCD8CF] dark:hover:bg-[#383834] text-[#8A8882] dark:text-[#9E9B95] disabled:opacity-30"
+                        className="p-1.5 sm:p-1 rounded hover:bg-[#DCD8CF] dark:hover:bg-[#383834] text-[#8A8882] dark:text-[#9E9B95] disabled:opacity-30 cursor-pointer"
                       >
-                        <MoveUp className="w-3 h-3" />
+                        <MoveUp className="w-3.5 h-3.5 sm:w-3 sm:h-3" />
                       </button>
                       <button
                         id={`move-down-page-btn-${page.id}`}
                         onClick={() => handleMovePage(index, 'down')}
                         disabled={index === pages.length - 1}
                         title="Move Page Down"
-                        className="p-1 rounded hover:bg-[#DCD8CF] dark:hover:bg-[#383834] text-[#8A8882] dark:text-[#9E9B95] disabled:opacity-30"
+                        className="p-1.5 sm:p-1 rounded hover:bg-[#DCD8CF] dark:hover:bg-[#383834] text-[#8A8882] dark:text-[#9E9B95] disabled:opacity-30 cursor-pointer"
                       >
-                        <MoveDown className="w-3 h-3" />
+                        <MoveDown className="w-3.5 h-3.5 sm:w-3 sm:h-3" />
                       </button>
                       {pages.length > 1 && (
                         <button
                           id={`delete-page-btn-${page.id}`}
                           onClick={() => setPageToDelete(page)}
                           title="Delete Page"
-                          className="p-1 rounded hover:bg-red-100 dark:hover:bg-red-950/50 text-red-500"
+                          className="p-1.5 sm:p-1 rounded hover:bg-red-100 dark:hover:bg-red-950/50 text-red-500 cursor-pointer"
                         >
-                          <Trash2 className="w-3 h-3" />
+                          <Trash2 className="w-3.5 h-3.5 sm:w-3 sm:h-3" />
                         </button>
                       )}
                     </div>
@@ -669,7 +729,7 @@ export const BookEditor: React.FC<BookEditorProps> = ({
           </div>
 
           {/* Sidebar Bottom: Editorial Progress Bar + Add Page */}
-          <div className="mt-auto p-4 border-t border-[#E5E1D8] dark:border-[#2E2E2A]">
+          <div className="mt-auto p-3 sm:p-4 border-t border-[#E5E1D8] dark:border-[#2E2E2A] shrink-0">
             <div className="flex items-center justify-between text-[10px] font-bold uppercase tracking-widest text-[#8A8882] dark:text-[#9E9B95] mb-2">
               <span>Progress</span>
               <span>{progressPercent}%</span>
@@ -682,104 +742,235 @@ export const BookEditor: React.FC<BookEditorProps> = ({
             </div>
             <button
               id="sidebar-add-page-btn"
-              onClick={handleAddNewPage}
-              className="w-full py-2 px-3 rounded-sm font-bold text-[10px] uppercase tracking-widest bg-[#EBE8E0] hover:bg-[#3A3A36] hover:text-white dark:bg-[#282824] dark:hover:bg-[#ECE9E2] dark:hover:text-[#1A1A1A] text-[#3A3A36] dark:text-[#ECE9E2] transition-all flex items-center justify-center gap-1.5"
+              onClick={async () => {
+                await handleAddNewPage();
+                if (typeof window !== 'undefined' && window.innerWidth < 768) {
+                  setIsSidebarOpen(false);
+                }
+              }}
+              className="w-full py-2.5 sm:py-2 px-3 min-h-[40px] sm:min-h-0 rounded-sm font-bold text-[10px] uppercase tracking-widest bg-[#EBE8E0] hover:bg-[#3A3A36] hover:text-white dark:bg-[#282824] dark:hover:bg-[#ECE9E2] dark:hover:text-[#1A1A1A] text-[#3A3A36] dark:text-[#ECE9E2] transition-all flex items-center justify-center gap-1.5 cursor-pointer"
             >
-              <Plus className="w-3.5 h-3.5" />
+              <Plus className="w-4 h-4 sm:w-3.5 sm:h-3.5" />
               <span>+ Add Page</span>
             </button>
           </div>
         </aside>
+        )}
 
         {/* ==================== MAIN EDITOR AREA ==================== */}
-        <section className="flex-1 flex flex-col h-full overflow-hidden bg-white dark:bg-[#181816]">
-          {/* Top Control Bar: Sidebar Toggle + Title + Sync Status + PDF Export */}
-          <div className="h-14 border-b border-[#E5E1D8] dark:border-[#2E2E2A] bg-[#F9F7F2]/90 dark:bg-[#181816]/90 backdrop-blur-sm px-6 flex items-center justify-between gap-4">
-            <div className="flex items-center gap-3 min-w-0 flex-1">
+        <section className="flex-1 flex flex-col h-full overflow-hidden bg-white dark:bg-[#181816] min-w-0">
+          {/* ==================== FOCUS MODE TOP BAR ==================== */}
+          {isFocusMode ? (
+            <div
+              id="focus-mode-top-bar"
+              className="h-12 border-b border-[#E5E1D8] dark:border-[#2E2E2A] bg-[#FAF9F5] dark:bg-[#181816] px-3 sm:px-6 flex items-center justify-between gap-2 sm:gap-4 select-none animate-in fade-in duration-150 shrink-0"
+            >
+              {/* Exit Focus Mode Action */}
               <button
-                id="toggle-sidebar-btn"
-                onClick={() => setIsSidebarOpen(!isSidebarOpen)}
-                className="p-1.5 rounded-sm text-[#8A8882] hover:text-[#1A1A1A] dark:hover:text-[#ECE9E2] hover:bg-[#EBE8E0]/70 dark:hover:bg-[#282824] transition-colors"
-                title={isSidebarOpen ? 'Collapse Sidebar' : 'Expand Sidebar'}
+                id="exit-focus-mode-btn"
+                onClick={() => setIsFocusMode(false)}
+                className="flex items-center gap-1.5 sm:gap-2 px-2.5 sm:px-3 py-1.5 rounded-sm bg-[#EBE8E0] dark:bg-[#282824] hover:bg-[#3A3A36] hover:text-white dark:hover:bg-[#ECE9E2] dark:hover:text-[#1A1A1A] text-xs font-medium text-[#3A3A36] dark:text-[#ECE9E2] transition-colors cursor-pointer shrink-0"
+                title="Exit Focus Mode (Esc)"
               >
-                {isSidebarOpen ? <ChevronLeft className="w-4 h-4" /> : <ChevronRight className="w-4 h-4" />}
+                <Minimize2 className="w-3.5 h-3.5" />
+                <span className="text-[10px] font-bold uppercase tracking-wider hidden xs:inline">Exit Focus</span>
+                <kbd className="text-[9px] font-mono px-1 py-0.2 bg-white/60 dark:bg-black/30 rounded border border-[#DCD8CF] dark:border-[#383834] hidden sm:inline">
+                  ESC
+                </kbd>
               </button>
 
-              {/* Page Title Editable Input */}
-              <input
-                id="page-title-input"
-                type="text"
-                value={pageTitle}
-                onChange={(e) => handleTitleChange(e.target.value)}
-                placeholder="Chapter Title..."
-                className="font-serif italic font-bold text-base sm:text-lg text-[#1A1A1A] dark:text-[#ECE9E2] bg-transparent border-b border-transparent hover:border-[#DCD8CF] dark:hover:border-[#383834] focus:border-[#3A3A36] dark:focus:border-[#ECE9E2] focus:outline-none px-1 py-0.5 max-w-md w-full truncate transition-all"
-              />
-            </div>
-
-            {/* Right Status Badges & Action Controls */}
-            <div className="flex items-center gap-4">
-              {/* Sync Status Badge */}
-              <div
-                id="sync-status-indicator"
-                className="hidden sm:flex items-center gap-2 px-3 py-1 bg-[#EBE8E0] dark:bg-[#282824] rounded-full border border-[#DCD8CF] dark:border-[#383834] text-[10px] font-bold uppercase tracking-tight text-[#6B6964] dark:text-[#A8A59E]"
-              >
-                {syncStatus === 'syncing' && (
-                  <>
-                    <RefreshCw className="w-3 h-3 animate-spin text-[#3A3A36] dark:text-[#ECE9E2]" />
-                    <span>Syncing...</span>
-                  </>
-                )}
-                {syncStatus === 'saving' && (
-                  <>
-                    <CloudUpload className="w-3 h-3 animate-pulse text-[#3A3A36] dark:text-[#ECE9E2]" />
-                    <span>Saving...</span>
-                  </>
-                )}
-                {syncStatus === 'saved' && (
-                  <>
-                    <div className="w-1.5 h-1.5 bg-green-500 rounded-full animate-pulse" />
-                    <span>Synced</span>
-                  </>
-                )}
+              {/* Minimal Chapter Switcher */}
+              <div className="flex items-center gap-1.5 sm:gap-3 min-w-0">
+                <button
+                  id="focus-prev-chapter-btn"
+                  onClick={async () => {
+                    if (activePageIndex > 0) {
+                      await handleSelectPage(pages[activePageIndex - 1]);
+                    }
+                  }}
+                  disabled={activePageIndex <= 0}
+                  className={`p-1.5 sm:p-1 rounded-sm ${
+                    activePageIndex <= 0
+                      ? 'opacity-30 cursor-not-allowed text-[#8A8882]'
+                      : 'text-[#5A5852] dark:text-[#A8A59E] hover:text-[#1A1A1A] dark:hover:text-[#ECE9E2] hover:bg-[#EBE8E0] dark:hover:bg-[#282824] cursor-pointer'
+                  }`}
+                  title="Previous Chapter"
+                >
+                  <ChevronLeft className="w-4 h-4" />
+                </button>
+                <div className="text-center truncate">
+                  <span className="text-xs serif italic font-bold text-[#1A1A1A] dark:text-[#ECE9E2]">
+                    Ch. {currentChapterNum}/{pages.length}
+                  </span>
+                  <span className="text-[10px] font-serif text-[#8A8882] dark:text-[#9E9B95] hidden md:inline ml-2 truncate">
+                    ({pageTitle})
+                  </span>
+                </div>
+                <button
+                  id="focus-next-chapter-btn"
+                  onClick={async () => {
+                    if (activePageIndex < pages.length - 1) {
+                      await handleSelectPage(pages[activePageIndex + 1]);
+                    }
+                  }}
+                  disabled={activePageIndex >= pages.length - 1}
+                  className={`p-1.5 sm:p-1 rounded-sm ${
+                    activePageIndex >= pages.length - 1
+                      ? 'opacity-30 cursor-not-allowed text-[#8A8882]'
+                      : 'text-[#5A5852] dark:text-[#A8A59E] hover:text-[#1A1A1A] dark:hover:text-[#ECE9E2] hover:bg-[#EBE8E0] dark:hover:bg-[#282824] cursor-pointer'
+                  }`}
+                  title="Next Chapter"
+                >
+                  <ChevronRight className="w-4 h-4" />
+                </button>
               </div>
 
-              {/* Export PDF Button */}
-              <button
-                id="editor-export-pdf-btn"
-                onClick={async () => {
-                  await flushCurrentWriting();
-                  onExportPdf(book, pages);
-                }}
-                className="px-4 py-1.5 bg-[#3A3A36] dark:bg-[#ECE9E2] text-white dark:text-[#1A1A1A] text-[10px] font-bold uppercase tracking-widest rounded-sm hover:bg-black dark:hover:bg-white transition-colors shadow-sm flex items-center gap-1.5"
-                title="Export Complete Book to PDF"
-              >
-                <Download className="w-3 h-3" />
-                <span className="hidden sm:inline">Export PDF</span>
-              </button>
-
-              {/* Distraction-free / Fullscreen toggle */}
-              <button
-                id="fullscreen-toggle-btn"
-                onClick={() => setIsFullscreen(!isFullscreen)}
-                className="p-1.5 rounded-sm text-[#8A8882] hover:text-[#1A1A1A] dark:hover:text-[#ECE9E2] hover:bg-[#EBE8E0]/70 dark:hover:bg-[#282824] transition-colors"
-                title={isFullscreen ? 'Exit Distraction-Free' : 'Distraction-Free Mode'}
-              >
-                {isFullscreen ? <Minimize2 className="w-4 h-4" /> : <Maximize2 className="w-4 h-4" />}
-              </button>
+              {/* Focus Stats & Sync dot */}
+              <div className="flex items-center gap-2 sm:gap-4 text-[10px] font-bold uppercase tracking-widest text-[#8A8882] dark:text-[#9E9B95] shrink-0">
+                <div className="flex items-center gap-1.5">
+                  <div className="w-1.5 h-1.5 bg-emerald-500 rounded-full animate-pulse" />
+                  <span className="hidden sm:inline">Synced</span>
+                </div>
+                <span className="font-mono text-xs">
+                  {wordCount.toLocaleString()} <span className="hidden sm:inline">Words</span>
+                </span>
+              </div>
             </div>
-          </div>
+          ) : (
+            /* ==================== STANDARD TOP BAR ==================== */
+            <div className="h-14 border-b border-[#E5E1D8] dark:border-[#2E2E2A] bg-[#F9F7F2]/90 dark:bg-[#181816]/90 backdrop-blur-sm px-3 sm:px-6 flex items-center justify-between gap-2 sm:gap-4 shrink-0">
+              <div className="flex items-center gap-2 sm:gap-3 min-w-0 flex-1">
+                <button
+                  id="toggle-sidebar-btn"
+                  onClick={() => setIsSidebarOpen(!isSidebarOpen)}
+                  className="p-2 sm:p-1.5 min-w-[36px] min-h-[36px] flex items-center justify-center rounded-sm text-[#8A8882] hover:text-[#1A1A1A] dark:hover:text-[#ECE9E2] hover:bg-[#EBE8E0]/70 dark:hover:bg-[#282824] transition-colors cursor-pointer shrink-0"
+                  title={isSidebarOpen ? 'Collapse Sidebar' : 'Expand Sidebar'}
+                >
+                  <Menu className="w-4 h-4 md:hidden" />
+                  <span className="hidden md:inline">
+                    {isSidebarOpen ? <ChevronLeft className="w-4 h-4" /> : <ChevronRight className="w-4 h-4" />}
+                  </span>
+                </button>
 
-          {/* ==================== WRITING TOOLBAR ==================== */}
-          <div
-            id="editor-toolbar"
-            className="border-b border-[#F0EFEB] dark:border-[#282824] bg-white dark:bg-[#21211E] px-6 py-2 flex flex-wrap items-center justify-between gap-3 text-xs"
-          >
+                {/* Page Title Editable Input */}
+                <input
+                  id="page-title-input"
+                  type="text"
+                  value={pageTitle}
+                  onChange={(e) => handleTitleChange(e.target.value)}
+                  placeholder="Chapter Title..."
+                  className="font-serif italic font-bold text-sm sm:text-base md:text-lg text-[#1A1A1A] dark:text-[#ECE9E2] bg-transparent border-b border-transparent hover:border-[#DCD8CF] dark:hover:border-[#383834] focus:border-[#3A3A36] dark:focus:border-[#ECE9E2] focus:outline-none px-1 py-0.5 max-w-xs sm:max-w-md w-full truncate transition-all"
+                />
+              </div>
+
+              {/* Right Status Badges & Action Controls */}
+              <div className="flex items-center gap-1.5 sm:gap-3 shrink-0">
+                {/* Sync Status Badge */}
+                <div
+                  id="sync-status-indicator"
+                  className="hidden md:flex items-center gap-2 px-3 py-1 bg-[#EBE8E0] dark:bg-[#282824] rounded-full border border-[#DCD8CF] dark:border-[#383834] text-[10px] font-bold uppercase tracking-tight text-[#6B6964] dark:text-[#A8A59E]"
+                >
+                  {syncStatus === 'syncing' && (
+                    <>
+                      <RefreshCw className="w-3 h-3 animate-spin text-[#3A3A36] dark:text-[#ECE9E2]" />
+                      <span>Syncing...</span>
+                    </>
+                  )}
+                  {syncStatus === 'saving' && (
+                    <>
+                      <CloudUpload className="w-3 h-3 animate-pulse text-[#3A3A36] dark:text-[#ECE9E2]" />
+                      <span>Saving...</span>
+                    </>
+                  )}
+                  {syncStatus === 'saved' && (
+                    <>
+                      <div className="w-1.5 h-1.5 bg-green-500 rounded-full animate-pulse" />
+                      <span>Synced</span>
+                    </>
+                  )}
+                </div>
+
+                {/* Focus Mode Button */}
+                <button
+                  id="focus-mode-toggle-btn"
+                  onClick={() => setIsFocusMode(true)}
+                  className="p-2 sm:py-1.5 sm:px-3 min-h-[36px] bg-[#EBE8E0] dark:bg-[#282824] hover:bg-[#3A3A36] hover:text-white dark:hover:bg-[#ECE9E2] dark:hover:text-[#1A1A1A] text-[#3A3A36] dark:text-[#ECE9E2] text-[10px] font-bold uppercase tracking-widest rounded-sm transition-colors shadow-xs flex items-center gap-1.5 cursor-pointer"
+                  title="Enter Focus Mode (Distraction-Free Writing)"
+                >
+                  <Sparkles className="w-3.5 h-3.5 text-[#C5A059]" />
+                  <span className="hidden sm:inline">Focus</span>
+                </button>
+
+                {/* Export Dropdown Menu (PDF & EPUB) */}
+                <div className="relative" ref={exportMenuRef}>
+                  <button
+                    id="editor-export-btn"
+                    onClick={() => setIsExportMenuOpen(!isExportMenuOpen)}
+                    className="p-2 sm:py-1.5 sm:px-3 min-h-[36px] bg-[#3A3A36] dark:bg-[#ECE9E2] text-white dark:text-[#1A1A1A] text-[10px] font-bold uppercase tracking-widest rounded-sm hover:bg-black dark:hover:bg-white transition-colors shadow-sm flex items-center gap-1 cursor-pointer"
+                    title="Export Manuscript"
+                  >
+                    <Download className="w-3.5 h-3.5" />
+                    <span className="hidden xs:inline">Export</span>
+                    <ChevronDown className="w-3 h-3 ml-0.5 opacity-70" />
+                  </button>
+
+                  {isExportMenuOpen && (
+                    <div className="absolute right-0 mt-1 w-48 rounded-sm bg-[#F9F7F2] dark:bg-[#21211E] border border-[#E5E1D8] dark:border-[#2E2E2A] shadow-xl py-1 z-30 animate-in fade-in zoom-in-95 duration-100">
+                      <button
+                        id="editor-export-pdf-item"
+                        onClick={async () => {
+                          setIsExportMenuOpen(false);
+                          await flushCurrentWriting();
+                          onExportPdf(book, pages);
+                        }}
+                        className="w-full px-3.5 py-2.5 sm:py-2 text-left text-xs font-medium text-[#3A3A36] dark:text-[#ECE9E2] hover:bg-[#EBE8E0] dark:hover:bg-[#2D2D29] flex items-center gap-2 cursor-pointer font-sans"
+                      >
+                        <FileText className="w-3.5 h-3.5 text-[#8A8882]" />
+                        <span>Export as PDF</span>
+                      </button>
+                      <button
+                        id="editor-export-epub-item"
+                        onClick={async () => {
+                          setIsExportMenuOpen(false);
+                          await flushCurrentWriting();
+                          if (onExportEpub) {
+                            onExportEpub(book, pages);
+                          }
+                        }}
+                        className="w-full px-3.5 py-2.5 sm:py-2 text-left text-xs font-medium text-[#3A3A36] dark:text-[#ECE9E2] hover:bg-[#EBE8E0] dark:hover:bg-[#2D2D29] flex items-center gap-2 cursor-pointer font-sans"
+                      >
+                        <BookOpen className="w-3.5 h-3.5 text-[#C5A059]" />
+                        <span>Export as EPUB</span>
+                      </button>
+                    </div>
+                  )}
+                </div>
+
+                {/* Distraction-free / Fullscreen toggle */}
+                <button
+                  id="fullscreen-toggle-btn"
+                  onClick={() => setIsFullscreen(!isFullscreen)}
+                  className="p-2 sm:p-1.5 min-w-[36px] min-h-[36px] flex items-center justify-center rounded-sm text-[#8A8882] hover:text-[#1A1A1A] dark:hover:text-[#ECE9E2] hover:bg-[#EBE8E0]/70 dark:hover:bg-[#282824] transition-colors cursor-pointer"
+                  title={isFullscreen ? 'Exit Fullscreen' : 'Fullscreen'}
+                >
+                  {isFullscreen ? <Minimize2 className="w-4 h-4" /> : <Maximize2 className="w-4 h-4" />}
+                </button>
+              </div>
+            </div>
+          )}
+
+          {/* ==================== WRITING TOOLBAR (Hidden in Focus Mode) ==================== */}
+          {!isFocusMode && (
+            <div
+              id="editor-toolbar"
+              className="border-b border-[#F0EFEB] dark:border-[#282824] bg-white dark:bg-[#21211E] px-3 sm:px-6 py-1.5 sm:py-2 flex items-center justify-between gap-2 sm:gap-4 text-xs overflow-x-auto shrink-0 scrollbar-none"
+            >
             {/* Formatting Actions */}
-            <div className="flex items-center flex-wrap gap-1 text-[#8A8882] dark:text-[#9E9B95]">
+            <div className="flex items-center gap-0.5 sm:gap-1 text-[#8A8882] dark:text-[#9E9B95] shrink-0">
               <button
                 id="btn-bold"
                 onClick={() => executeFormat('bold')}
-                className="p-1.5 rounded-sm hover:text-[#1A1A1A] dark:hover:text-[#ECE9E2] hover:bg-[#EBE8E0]/60 dark:hover:bg-[#282824]"
+                className="p-2 sm:p-1.5 min-w-[32px] min-h-[32px] flex items-center justify-center rounded-sm hover:text-[#1A1A1A] dark:hover:text-[#ECE9E2] hover:bg-[#EBE8E0]/60 dark:hover:bg-[#282824] cursor-pointer"
                 title="Bold (Ctrl+B)"
               >
                 <Bold className="w-3.5 h-3.5" />
@@ -787,7 +978,7 @@ export const BookEditor: React.FC<BookEditorProps> = ({
               <button
                 id="btn-italic"
                 onClick={() => executeFormat('italic')}
-                className="p-1.5 rounded-sm hover:text-[#1A1A1A] dark:hover:text-[#ECE9E2] hover:bg-[#EBE8E0]/60 dark:hover:bg-[#282824]"
+                className="p-2 sm:p-1.5 min-w-[32px] min-h-[32px] flex items-center justify-center rounded-sm hover:text-[#1A1A1A] dark:hover:text-[#ECE9E2] hover:bg-[#EBE8E0]/60 dark:hover:bg-[#282824] cursor-pointer"
                 title="Italic (Ctrl+I)"
               >
                 <Italic className="w-3.5 h-3.5" />
@@ -795,7 +986,7 @@ export const BookEditor: React.FC<BookEditorProps> = ({
               <button
                 id="btn-underline"
                 onClick={() => executeFormat('underline')}
-                className="p-1.5 rounded-sm hover:text-[#1A1A1A] dark:hover:text-[#ECE9E2] hover:bg-[#EBE8E0]/60 dark:hover:bg-[#282824]"
+                className="p-2 sm:p-1.5 min-w-[32px] min-h-[32px] flex items-center justify-center rounded-sm hover:text-[#1A1A1A] dark:hover:text-[#ECE9E2] hover:bg-[#EBE8E0]/60 dark:hover:bg-[#282824] cursor-pointer"
                 title="Underline (Ctrl+U)"
               >
                 <Underline className="w-3.5 h-3.5" />
@@ -803,18 +994,18 @@ export const BookEditor: React.FC<BookEditorProps> = ({
               <button
                 id="btn-strike"
                 onClick={() => executeFormat('strikeThrough')}
-                className="p-1.5 rounded-sm hover:text-[#1A1A1A] dark:hover:text-[#ECE9E2] hover:bg-[#EBE8E0]/60 dark:hover:bg-[#282824]"
+                className="p-2 sm:p-1.5 min-w-[32px] min-h-[32px] flex items-center justify-center rounded-sm hover:text-[#1A1A1A] dark:hover:text-[#ECE9E2] hover:bg-[#EBE8E0]/60 dark:hover:bg-[#282824] cursor-pointer"
                 title="Strikethrough"
               >
                 <Strikethrough className="w-3.5 h-3.5" />
               </button>
 
-              <span className="w-px h-4 bg-[#E5E1D8] dark:bg-[#2E2E2A] mx-1" />
+              <span className="w-px h-4 bg-[#E5E1D8] dark:bg-[#2E2E2A] mx-0.5 sm:mx-1" />
 
               <button
                 id="btn-h1"
                 onClick={() => executeFormat('formatBlock', '<h1>')}
-                className="p-1.5 rounded-sm hover:text-[#1A1A1A] dark:hover:text-[#ECE9E2] hover:bg-[#EBE8E0]/60 dark:hover:bg-[#282824]"
+                className="p-2 sm:p-1.5 min-w-[32px] min-h-[32px] flex items-center justify-center rounded-sm hover:text-[#1A1A1A] dark:hover:text-[#ECE9E2] hover:bg-[#EBE8E0]/60 dark:hover:bg-[#282824] cursor-pointer"
                 title="Heading 1"
               >
                 <Heading1 className="w-3.5 h-3.5" />
@@ -822,7 +1013,7 @@ export const BookEditor: React.FC<BookEditorProps> = ({
               <button
                 id="btn-h2"
                 onClick={() => executeFormat('formatBlock', '<h2>')}
-                className="p-1.5 rounded-sm hover:text-[#1A1A1A] dark:hover:text-[#ECE9E2] hover:bg-[#EBE8E0]/60 dark:hover:bg-[#282824]"
+                className="p-2 sm:p-1.5 min-w-[32px] min-h-[32px] flex items-center justify-center rounded-sm hover:text-[#1A1A1A] dark:hover:text-[#ECE9E2] hover:bg-[#EBE8E0]/60 dark:hover:bg-[#282824] cursor-pointer"
                 title="Heading 2"
               >
                 <Heading2 className="w-3.5 h-3.5" />
@@ -830,18 +1021,18 @@ export const BookEditor: React.FC<BookEditorProps> = ({
               <button
                 id="btn-p"
                 onClick={() => executeFormat('formatBlock', '<p>')}
-                className="px-2 py-1 rounded-sm hover:text-[#1A1A1A] dark:hover:text-[#ECE9E2] hover:bg-[#EBE8E0]/60 dark:hover:bg-[#282824] font-serif"
+                className="px-2 py-1 min-h-[32px] flex items-center justify-center rounded-sm hover:text-[#1A1A1A] dark:hover:text-[#ECE9E2] hover:bg-[#EBE8E0]/60 dark:hover:bg-[#282824] font-serif cursor-pointer"
                 title="Paragraph"
               >
                 ¶
               </button>
 
-              <span className="w-px h-4 bg-[#E5E1D8] dark:bg-[#2E2E2A] mx-1" />
+              <span className="w-px h-4 bg-[#E5E1D8] dark:bg-[#2E2E2A] mx-0.5 sm:mx-1" />
 
               <button
                 id="btn-align-left"
                 onClick={() => executeFormat('justifyLeft')}
-                className="p-1.5 rounded-sm hover:text-[#1A1A1A] dark:hover:text-[#ECE9E2] hover:bg-[#EBE8E0]/60 dark:hover:bg-[#282824]"
+                className="p-2 sm:p-1.5 min-w-[32px] min-h-[32px] flex items-center justify-center rounded-sm hover:text-[#1A1A1A] dark:hover:text-[#ECE9E2] hover:bg-[#EBE8E0]/60 dark:hover:bg-[#282824] cursor-pointer"
                 title="Align Left"
               >
                 <AlignLeft className="w-3.5 h-3.5" />
@@ -849,7 +1040,7 @@ export const BookEditor: React.FC<BookEditorProps> = ({
               <button
                 id="btn-align-center"
                 onClick={() => executeFormat('justifyCenter')}
-                className="p-1.5 rounded-sm hover:text-[#1A1A1A] dark:hover:text-[#ECE9E2] hover:bg-[#EBE8E0]/60 dark:hover:bg-[#282824]"
+                className="p-2 sm:p-1.5 min-w-[32px] min-h-[32px] flex items-center justify-center rounded-sm hover:text-[#1A1A1A] dark:hover:text-[#ECE9E2] hover:bg-[#EBE8E0]/60 dark:hover:bg-[#282824] cursor-pointer"
                 title="Align Center"
               >
                 <AlignCenter className="w-3.5 h-3.5" />
@@ -857,7 +1048,7 @@ export const BookEditor: React.FC<BookEditorProps> = ({
               <button
                 id="btn-align-right"
                 onClick={() => executeFormat('justifyRight')}
-                className="p-1.5 rounded-sm hover:text-[#1A1A1A] dark:hover:text-[#ECE9E2] hover:bg-[#EBE8E0]/60 dark:hover:bg-[#282824]"
+                className="p-2 sm:p-1.5 min-w-[32px] min-h-[32px] flex items-center justify-center rounded-sm hover:text-[#1A1A1A] dark:hover:text-[#ECE9E2] hover:bg-[#EBE8E0]/60 dark:hover:bg-[#282824] cursor-pointer"
                 title="Align Right"
               >
                 <AlignRight className="w-3.5 h-3.5" />
@@ -865,18 +1056,18 @@ export const BookEditor: React.FC<BookEditorProps> = ({
               <button
                 id="btn-align-justify"
                 onClick={() => executeFormat('justifyFull')}
-                className="p-1.5 rounded-sm hover:text-[#1A1A1A] dark:hover:text-[#ECE9E2] hover:bg-[#EBE8E0]/60 dark:hover:bg-[#282824]"
+                className="p-2 sm:p-1.5 min-w-[32px] min-h-[32px] flex items-center justify-center rounded-sm hover:text-[#1A1A1A] dark:hover:text-[#ECE9E2] hover:bg-[#EBE8E0]/60 dark:hover:bg-[#282824] cursor-pointer"
                 title="Justify"
               >
                 <AlignJustify className="w-3.5 h-3.5" />
               </button>
 
-              <span className="w-px h-4 bg-[#E5E1D8] dark:bg-[#2E2E2A] mx-1" />
+              <span className="w-px h-4 bg-[#E5E1D8] dark:bg-[#2E2E2A] mx-0.5 sm:mx-1" />
 
               <button
                 id="btn-bullet-list"
                 onClick={() => executeFormat('insertUnorderedList')}
-                className="p-1.5 rounded-sm hover:text-[#1A1A1A] dark:hover:text-[#ECE9E2] hover:bg-[#EBE8E0]/60 dark:hover:bg-[#282824]"
+                className="p-2 sm:p-1.5 min-w-[32px] min-h-[32px] flex items-center justify-center rounded-sm hover:text-[#1A1A1A] dark:hover:text-[#ECE9E2] hover:bg-[#EBE8E0]/60 dark:hover:bg-[#282824] cursor-pointer"
                 title="Bullet List"
               >
                 <List className="w-3.5 h-3.5" />
@@ -884,18 +1075,18 @@ export const BookEditor: React.FC<BookEditorProps> = ({
               <button
                 id="btn-number-list"
                 onClick={() => executeFormat('insertOrderedList')}
-                className="p-1.5 rounded-sm hover:text-[#1A1A1A] dark:hover:text-[#ECE9E2] hover:bg-[#EBE8E0]/60 dark:hover:bg-[#282824]"
+                className="p-2 sm:p-1.5 min-w-[32px] min-h-[32px] flex items-center justify-center rounded-sm hover:text-[#1A1A1A] dark:hover:text-[#ECE9E2] hover:bg-[#EBE8E0]/60 dark:hover:bg-[#282824] cursor-pointer"
                 title="Numbered List"
               >
                 <ListOrdered className="w-3.5 h-3.5" />
               </button>
 
-              <span className="w-px h-4 bg-[#E5E1D8] dark:bg-[#2E2E2A] mx-1" />
+              <span className="w-px h-4 bg-[#E5E1D8] dark:bg-[#2E2E2A] mx-0.5 sm:mx-1" />
 
               <button
                 id="btn-undo"
                 onClick={() => executeFormat('undo')}
-                className="p-1.5 rounded-sm hover:text-[#1A1A1A] dark:hover:text-[#ECE9E2] hover:bg-[#EBE8E0]/60 dark:hover:bg-[#282824]"
+                className="p-2 sm:p-1.5 min-w-[32px] min-h-[32px] flex items-center justify-center rounded-sm hover:text-[#1A1A1A] dark:hover:text-[#ECE9E2] hover:bg-[#EBE8E0]/60 dark:hover:bg-[#282824] cursor-pointer"
                 title="Undo"
               >
                 <Undo className="w-3.5 h-3.5" />
@@ -903,7 +1094,7 @@ export const BookEditor: React.FC<BookEditorProps> = ({
               <button
                 id="btn-redo"
                 onClick={() => executeFormat('redo')}
-                className="p-1.5 rounded-sm hover:text-[#1A1A1A] dark:hover:text-[#ECE9E2] hover:bg-[#EBE8E0]/60 dark:hover:bg-[#282824]"
+                className="p-2 sm:p-1.5 min-w-[32px] min-h-[32px] flex items-center justify-center rounded-sm hover:text-[#1A1A1A] dark:hover:text-[#ECE9E2] hover:bg-[#EBE8E0]/60 dark:hover:bg-[#282824] cursor-pointer"
                 title="Redo"
               >
                 <Redo className="w-3.5 h-3.5" />
@@ -911,13 +1102,13 @@ export const BookEditor: React.FC<BookEditorProps> = ({
             </div>
 
             {/* Typography & Auto-Correction Controls */}
-            <div className="flex items-center gap-4">
+            <div className="flex items-center gap-2 sm:gap-4 shrink-0">
               {/* Font Family Selector */}
               <div className="flex items-center rounded-sm border border-[#DCD8CF] dark:border-[#383834] overflow-hidden bg-[#EBE8E0]/40 dark:bg-[#282824] text-[10px] font-bold uppercase tracking-wider">
                 <button
                   id="font-serif-btn"
                   onClick={() => setEditorFont('serif')}
-                  className={`px-3 py-1 font-serif ${
+                  className={`px-2.5 sm:px-3 py-1 font-serif cursor-pointer ${
                     editorFont === 'serif'
                       ? 'bg-[#3A3A36] text-white dark:bg-[#ECE9E2] dark:text-[#1A1A1A]'
                       : 'text-[#8A8882] hover:text-[#1A1A1A] dark:hover:text-[#ECE9E2]'
@@ -928,7 +1119,7 @@ export const BookEditor: React.FC<BookEditorProps> = ({
                 <button
                   id="font-sans-btn"
                   onClick={() => setEditorFont('sans')}
-                  className={`px-3 py-1 font-sans ${
+                  className={`px-2.5 sm:px-3 py-1 font-sans cursor-pointer ${
                     editorFont === 'sans'
                       ? 'bg-[#3A3A36] text-white dark:bg-[#ECE9E2] dark:text-[#1A1A1A]'
                       : 'text-[#8A8882] hover:text-[#1A1A1A] dark:hover:text-[#ECE9E2]'
@@ -939,15 +1130,15 @@ export const BookEditor: React.FC<BookEditorProps> = ({
               </div>
 
               {/* Auto-Correction Toggle (Artistic Flair switch layout) */}
-              <div className="flex items-center space-x-3">
-                <span className="text-[10px] font-bold uppercase tracking-widest text-[#8A8882] dark:text-[#9E9B95]">
-                  Auto-Correction
+              <div className="flex items-center space-x-2 sm:space-x-3">
+                <span className="text-[10px] font-bold uppercase tracking-widest text-[#8A8882] dark:text-[#9E9B95] hidden xs:inline">
+                  Auto-Correct
                 </span>
                 <button
                   id="auto-correct-toggle-btn"
                   type="button"
                   onClick={toggleAutoCorrect}
-                  className={`w-8 h-4 rounded-full relative p-0.5 transition-colors cursor-pointer ${
+                  className={`w-8 h-4 rounded-full relative p-0.5 transition-colors cursor-pointer shrink-0 ${
                     autoCorrectEnabled ? 'bg-[#3A3A36] dark:bg-[#ECE9E2]' : 'bg-[#DCD8CF] dark:bg-[#383834]'
                   }`}
                   title={autoCorrectEnabled ? 'Auto-correction is ON (Press SPACE to correct)' : 'Auto-correction is OFF'}
@@ -963,19 +1154,20 @@ export const BookEditor: React.FC<BookEditorProps> = ({
               </div>
             </div>
           </div>
+          )}
 
           {/* ==================== MAIN WRITING CANVAS ==================== */}
-          <div className="flex-1 overflow-y-auto px-4 py-10 sm:py-16 flex justify-center bg-[#FAF9F5] dark:bg-[#181816]">
+          <div className="flex-1 overflow-y-auto px-2 py-4 sm:px-6 sm:py-10 lg:py-16 flex justify-center bg-[#FAF9F5] dark:bg-[#181816]">
             <article
               id="book-editor-sheet"
-              className="w-full max-w-2xl min-h-[750px] bg-white dark:bg-[#21211E] border border-[#E5E1D8] dark:border-[#2E2E2A] rounded-sm p-8 sm:p-14 lg:p-20 shadow-sm focus-within:border-[#3A3A36]/40 dark:focus-within:border-[#ECE9E2]/40 transition-all flex flex-col"
+              className="w-full max-w-2xl min-h-[500px] sm:min-h-[750px] bg-white dark:bg-[#21211E] border border-[#E5E1D8] dark:border-[#2E2E2A] rounded-sm p-4 sm:p-12 lg:p-16 shadow-sm focus-within:border-[#3A3A36]/40 dark:focus-within:border-[#ECE9E2]/40 transition-all flex flex-col"
             >
               {/* Editorial Chapter Heading - Directly Editable */}
-              <div className="mb-8">
-                <div className="text-[10px] font-bold uppercase tracking-widest text-[#8A8882] dark:text-[#9E9B95] mb-1.5 flex items-center gap-2 select-none">
+              <div className="mb-4 sm:mb-8">
+                <div className="text-[10px] font-bold uppercase tracking-widest text-[#8A8882] dark:text-[#9E9B95] mb-1 flex items-center gap-1.5 sm:gap-2 select-none">
                   <span>Chapter {currentChapterNum}</span>
                   <span className="text-[#DCD8CF] dark:text-[#383834]">•</span>
-                  <span className="font-serif italic font-normal text-xs text-[#8A8882]">Click to edit title</span>
+                  <span className="font-serif italic font-normal text-[11px] sm:text-xs text-[#8A8882]">Click to edit title</span>
                 </div>
                 <input
                   id="canvas-chapter-title-input"
@@ -984,9 +1176,9 @@ export const BookEditor: React.FC<BookEditorProps> = ({
                   onChange={(e) => handleTitleChange(e.target.value)}
                   onBlur={() => flushCurrentWriting()}
                   placeholder={`Chapter ${currentChapterNum}`}
-                  className="w-full text-2xl sm:text-3xl lg:text-4xl serif italic font-bold text-[#1A1A1A] dark:text-[#ECE9E2] bg-transparent border-b border-transparent hover:border-[#E5E1D8] dark:hover:border-[#2E2E2A] focus:border-[#3A3A36] dark:focus:border-[#ECE9E2] focus:outline-none py-1 transition-all"
+                  className="w-full text-xl sm:text-2xl lg:text-3xl serif italic font-bold text-[#1A1A1A] dark:text-[#ECE9E2] bg-transparent border-b border-transparent hover:border-[#E5E1D8] dark:hover:border-[#2E2E2A] focus:border-[#3A3A36] dark:focus:border-[#ECE9E2] focus:outline-none py-1 transition-all"
                 />
-                <div className="w-20 h-0.5 bg-[#3A3A36] dark:bg-[#ECE9E2] mt-2 opacity-80" />
+                <div className="w-16 sm:w-20 h-0.5 bg-[#3A3A36] dark:bg-[#ECE9E2] mt-1.5 opacity-80" />
               </div>
 
               {/* The Actual ContentEditable Writing Editor */}
@@ -998,9 +1190,9 @@ export const BookEditor: React.FC<BookEditorProps> = ({
                 suppressContentEditableWarning
                 onInput={handleEditorInput}
                 onKeyDown={handleEditorKeyDown}
-                className={`flex-1 focus:outline-none text-[#3A3A36] dark:text-[#D4D1CA] ${fontClass} ${fontSizeClass} space-y-4 prose dark:prose-invert max-w-none empty:before:content-['Start_writing_your_story_here...'] empty:before:text-[#8A8882] empty:before:pointer-events-none`}
+                className={`flex-1 focus:outline-none text-[#3A3A36] dark:text-[#D4D1CA] ${fontClass} ${fontSizeClass} space-y-3 sm:space-y-4 prose dark:prose-invert max-w-none empty:before:content-['Start_writing_your_story_here...'] empty:before:text-[#8A8882] empty:before:pointer-events-none`}
                 style={{
-                  minHeight: '450px',
+                  minHeight: '350px',
                   wordBreak: 'break-word',
                 }}
               />
@@ -1010,32 +1202,32 @@ export const BookEditor: React.FC<BookEditorProps> = ({
           {/* ==================== LIVE WORD & CHAR COUNT FOOTER ==================== */}
           <footer
             id="editor-footer"
-            className="h-12 border-t border-[#E5E1D8] dark:border-[#2E2E2A] bg-[#F9F7F2] dark:bg-[#181816] px-8 flex items-center justify-between text-xs select-none"
+            className="h-11 sm:h-12 border-t border-[#E5E1D8] dark:border-[#2E2E2A] bg-[#F9F7F2] dark:bg-[#181816] px-3 sm:px-8 flex items-center justify-between text-xs select-none shrink-0"
           >
-            <div className="flex items-center gap-3 text-[10px] font-bold uppercase tracking-widest text-[#8A8882] dark:text-[#9E9B95]">
-              <span className="hidden sm:inline">
+            <div className="flex items-center gap-2 sm:gap-3 text-[10px] font-bold uppercase tracking-widest text-[#8A8882] dark:text-[#9E9B95] min-w-0">
+              <span className="hidden sm:inline truncate max-w-[150px]">
                 Active: <span className="text-[#1A1A1A] dark:text-[#ECE9E2]">{pageTitle}</span>
               </span>
               <span className="text-[#DCD8CF] dark:text-[#383834] hidden sm:inline">•</span>
-              <span>
+              <span className="truncate">
                 Saved {lastSavedTime.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
               </span>
             </div>
 
             {/* Word & Char counts in Artistic Flair stacked typography */}
-            <div className="flex items-center space-x-6 text-[10px] font-bold uppercase tracking-widest text-[#8A8882] dark:text-[#9E9B95]">
+            <div className="flex items-center space-x-3 sm:space-x-6 text-[10px] font-bold uppercase tracking-widest text-[#8A8882] dark:text-[#9E9B95] shrink-0">
               <div className="flex flex-col items-end">
                 <span className="text-[#1A1A1A] dark:text-[#ECE9E2] font-mono text-xs font-bold">
                   {wordCount.toLocaleString()}
                 </span>
                 <span>Words</span>
               </div>
-              <div className="w-[1px] h-6 bg-[#E5E1D8] dark:bg-[#2E2E2A]" />
+              <div className="w-[1px] h-5 sm:h-6 bg-[#E5E1D8] dark:bg-[#2E2E2A]" />
               <div className="flex flex-col items-end">
                 <span className="text-[#1A1A1A] dark:text-[#ECE9E2] font-mono text-xs font-bold">
                   {charCount.toLocaleString()}
                 </span>
-                <span>Characters</span>
+                <span>Chars</span>
               </div>
             </div>
           </footer>
@@ -1044,31 +1236,31 @@ export const BookEditor: React.FC<BookEditorProps> = ({
 
       {/* Delete Confirmation Modal */}
       {pageToDelete && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-black/60 backdrop-blur-xs">
-          <div className="w-full max-w-md bg-[#F9F7F2] dark:bg-[#21211E] rounded-sm shadow-2xl border border-[#E5E1D8] dark:border-[#2E2E2A] p-6 space-y-4">
-            <div className="flex items-center gap-3 text-red-600 dark:text-red-400">
-              <AlertTriangle className="w-5 h-5" />
-              <h3 className="serif italic font-bold text-lg text-[#1A1A1A] dark:text-[#ECE9E2]">
+        <div className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-4 bg-black/60 backdrop-blur-xs overflow-y-auto">
+          <div className="w-full max-w-md bg-[#F9F7F2] dark:bg-[#21211E] rounded-sm shadow-2xl border border-[#E5E1D8] dark:border-[#2E2E2A] p-4 sm:p-6 space-y-4 my-auto">
+            <div className="flex items-center gap-2.5 text-red-600 dark:text-red-400">
+              <AlertTriangle className="w-5 h-5 shrink-0" />
+              <h3 className="serif italic font-bold text-base sm:text-lg text-[#1A1A1A] dark:text-[#ECE9E2] truncate">
                 Delete Chapter?
               </h3>
             </div>
-            <p className="text-sm text-[#5A5852] dark:text-[#A8A59E]">
+            <p className="text-xs sm:text-sm text-[#5A5852] dark:text-[#A8A59E] leading-relaxed">
               Are you sure you want to permanently delete{' '}
               <strong className="text-[#1A1A1A] dark:text-[#ECE9E2]">
                 "{pageToDelete.title}"
               </strong>
               ? This action cannot be undone.
             </p>
-            <div className="flex items-center justify-end gap-3 pt-2">
+            <div className="flex flex-col-reverse sm:flex-row items-stretch sm:items-center justify-end gap-2 sm:gap-3 pt-2">
               <button
                 onClick={() => setPageToDelete(null)}
-                className="px-4 py-2 rounded-sm text-[10px] font-bold uppercase tracking-widest text-[#8A8882] hover:text-[#1A1A1A] dark:hover:text-[#ECE9E2] hover:bg-[#EBE8E0] dark:hover:bg-[#282824] transition-colors"
+                className="w-full sm:w-auto px-4 py-2.5 sm:py-2 min-h-[40px] sm:min-h-0 rounded-sm text-[10px] font-bold uppercase tracking-widest text-[#8A8882] hover:text-[#1A1A1A] dark:hover:text-[#ECE9E2] hover:bg-[#EBE8E0] dark:hover:bg-[#282824] transition-colors cursor-pointer text-center"
               >
                 Cancel
               </button>
               <button
                 onClick={confirmDeletePage}
-                className="px-4 py-2 rounded-sm text-[10px] font-bold uppercase tracking-widest bg-red-600 hover:bg-red-700 text-white shadow-sm transition-colors"
+                className="w-full sm:w-auto px-4 py-2.5 sm:py-2 min-h-[42px] sm:min-h-0 rounded-sm text-[10px] font-bold uppercase tracking-widest bg-red-600 hover:bg-red-700 text-white shadow-sm transition-colors cursor-pointer text-center"
               >
                 Delete Page
               </button>
