@@ -292,11 +292,11 @@ export const AiAssistantPanel: React.FC<AiAssistantPanelProps> = ({
             }
             const fallbackText = combinedSuggestions.length > 0
               ? `I've crafted an enhanced revision with sensory details and polished rhythm:`
-              : fullText || currentStreamContent;
+              : (fullText || currentStreamContent || '').trim() || `I've analyzed your manuscript. Let me know what you'd like to develop next!`;
 
             return {
               ...m,
-              content: fullText || currentStreamContent || fallbackText,
+              content: (fullText || currentStreamContent || '').trim() || fallbackText,
               isStreaming: false,
               suggestions: combinedSuggestions,
             };
