@@ -4,18 +4,14 @@ import { GoogleGenAI, Type, FunctionDeclaration } from '@google/genai';
 let geminiClient: GoogleGenAI | null = null;
 
 export function getGeminiClient(): GoogleGenAI {
-  const apiKey = process.env.GEMINI_API_KEY;
+  const rawKey = process.env.GEMINI_API_KEY;
+  const apiKey = rawKey ? rawKey.replace(/^["']|["']$/g, '').trim() : '';
   if (!apiKey) {
-    throw new Error('GEMINI_API_KEY is not configured on the server. Please check your environment variables.');
+    throw new Error('GEMINI_API_KEY is not configured in environment variables. Please add GEMINI_API_KEY in Vercel Project Settings -> Environment Variables.');
   }
   if (!geminiClient) {
     geminiClient = new GoogleGenAI({
       apiKey,
-      httpOptions: {
-        headers: {
-          'User-Agent': 'aistudio-build',
-        },
-      },
     });
   }
   return geminiClient;
@@ -67,13 +63,23 @@ export async function parseRequestBody(req: any): Promise<any> {
     return req.body;
   }
 
-  // Fallback for raw Node IncomingMessage streams
+  // If request has already ended or is not readable
+  if (req.readableEnded || (req.complete && !req.readable)) {
+    return {};
+  }
+
+  // Fallback for raw Node IncomingMessage streams with safe timeout
   return new Promise((resolve) => {
     let data = '';
+    const timer = setTimeout(() => {
+      resolve({});
+    }, 2000);
+
     req.on('data', (chunk: any) => {
       data += chunk;
     });
     req.on('end', () => {
+      clearTimeout(timer);
       if (!data) return resolve({});
       try {
         resolve(JSON.parse(data));
@@ -81,7 +87,10 @@ export async function parseRequestBody(req: any): Promise<any> {
         resolve({});
       }
     });
-    req.on('error', () => resolve({}));
+    req.on('error', () => {
+      clearTimeout(timer);
+      resolve({});
+    });
   });
 }
 
@@ -148,9 +157,15 @@ export const proposeCreateChapterDeclaration: FunctionDeclaration = {
 };
 
 // Candidate models for MYNOOK AI with automatic fallback
+// Includes both standard Google AI Studio production models and experimental/sandbox models
 export const CANDIDATE_MODELS = [
+  'gemini-2.5-flash',
+  'gemini-2.0-flash',
+  'gemini-1.5-flash',
   'gemini-3.5-flash',
   'gemini-3.5-flash-lite',
+  'gemini-2.5-pro',
+  'gemini-2.0-flash-lite',
   'gemini-flash-latest',
   'gemini-3.7-flash',
   'gemini-3.8-flash',
@@ -368,9 +383,8 @@ export async function handleAiChatRequest(req: any, res: any) {
 
     // Handle Streaming SSE
     if (stream) {
-      res.setHeader('Content-Type', 'text/event-stream');
+      res.setHeader('Content-Type', 'text/event-stream; charset=utf-8');
       res.setHeader('Cache-Control', 'no-cache, no-transform');
-      res.setHeader('Connection', 'keep-alive');
       res.setHeader('X-Accel-Buffering', 'no');
       if (typeof res.flushHeaders === 'function') {
         res.flushHeaders();
@@ -386,6 +400,7 @@ export async function handleAiChatRequest(req: any, res: any) {
 
       let fullText = '';
       let streamSucceeded = false;
+      let lastStreamError: any = null;
 
       for (const model of CANDIDATE_MODELS) {
         if (isClosed) break;
@@ -448,6 +463,7 @@ export async function handleAiChatRequest(req: any, res: any) {
           streamSucceeded = true;
           break; // successfully finished stream
         } catch (streamError: any) {
+          lastStreamError = streamError;
           console.warn(`[MYNOOK AI] Stream with model ${model} failed (chunkCount: ${chunkCount}):`, streamError?.message || streamError);
           if (chunkCount > 0) {
             // Already started outputting chunks to client, cannot switch model mid-stream
@@ -458,10 +474,12 @@ export async function handleAiChatRequest(req: any, res: any) {
       }
 
       if (!streamSucceeded && !isClosed) {
+        const errorMsg = lastStreamError?.message || 'Gemini API request failed. Check the server configuration.';
+        console.error('[MYNOOK AI] Stream failed across all candidate models:', errorMsg);
         res.write(
           `data: ${JSON.stringify({
             type: 'error',
-            error: 'Gemini API request failed. Check the server configuration.',
+            error: errorMsg,
           })}\n\n`
         );
         res.end();
@@ -492,9 +510,11 @@ export async function handleAiChatRequest(req: any, res: any) {
       });
     }
   } catch (error: any) {
-    console.error('[MYNOOK AI] Gemini request failed (endpoint error):', error?.message || error);
-    return sendJsonResponse(res, 500, {
-      error: 'Gemini API request failed. Check the server configuration.',
+    const errorMsg = error?.message || 'Gemini API request failed. Check the server configuration.';
+    const statusCode = error?.status && error.status >= 400 && error.status < 600 ? error.status : 500;
+    console.error('[MYNOOK AI] Gemini request failed (endpoint error):', errorMsg, 'status:', statusCode);
+    return sendJsonResponse(res, statusCode, {
+      error: errorMsg,
     });
   }
 }
@@ -543,9 +563,11 @@ ${text.trim()}`;
       targetLang,
     });
   } catch (error: any) {
-    console.error('[MYNOOK AI] Translation error:', error?.message || error);
-    return sendJsonResponse(res, 500, {
-      error: 'Gemini API request failed. Check the server configuration.',
+    const errorMsg = error?.message || 'Gemini API translation failed. Check the server configuration.';
+    const statusCode = error?.status && error.status >= 400 && error.status < 600 ? error.status : 500;
+    console.error('[MYNOOK AI] Translation error:', errorMsg, 'status:', statusCode);
+    return sendJsonResponse(res, statusCode, {
+      error: errorMsg,
     });
   }
 }
