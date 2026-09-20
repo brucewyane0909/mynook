@@ -18,12 +18,15 @@ import {
   FileText,
   AlertCircle,
   CornerDownLeft,
+  RefreshCw,
+  AlertTriangle,
 } from 'lucide-react';
 import { Book, BookPage } from '../types';
 import {
   ChatMessage,
   AiSuggestion,
   extractSuggestionsFromText,
+  generateStableSuggestionId,
   streamAiChat,
   translateText,
 } from '../services/aiService';
@@ -37,7 +40,9 @@ interface AiAssistantPanelProps {
   currentChapterNumber: number;
   selectedText: string;
   onClearSelectedText: () => void;
-  onApplySuggestion: (suggestion: AiSuggestion) => void;
+  onApplySuggestion: (
+    suggestion: AiSuggestion
+  ) => Promise<{ success: boolean; error?: string } | boolean | void> | { success: boolean; error?: string } | boolean | void;
   onReplaceSelection: (newText: string) => void;
   onCreateChapterFromAi?: (title: string, content?: string) => void;
 }
@@ -93,6 +98,142 @@ const SUPPORTED_LANGUAGES = [
   'German',
 ];
 
+interface SuggestionCardProps {
+  suggestion: AiSuggestion;
+  status: 'pending' | 'applying' | 'applied' | 'rejected' | 'failed';
+  errorMessage?: string;
+  onApply: (suggestion: AiSuggestion) => void;
+  onReject: (suggestionId: string) => void;
+  onCopy: (id: string, text: string) => void;
+  isCopied: boolean;
+}
+
+const SuggestionCard: React.FC<SuggestionCardProps> = ({
+  suggestion,
+  status,
+  errorMessage,
+  onApply,
+  onReject,
+  onCopy,
+  isCopied,
+}) => {
+  const isApplied = status === 'applied';
+  const isApplying = status === 'applying';
+  const isRejected = status === 'rejected';
+  const isFailed = status === 'failed';
+
+  return (
+    <div
+      id={`suggestion-card-${suggestion.id}`}
+      className={`p-3 rounded border transition-all text-xs ${
+        isApplied
+          ? 'bg-emerald-50/80 dark:bg-emerald-950/25 border-emerald-300 dark:border-emerald-800'
+          : isRejected
+          ? 'bg-red-50/50 dark:bg-red-950/20 border-red-200 dark:border-red-900 opacity-60'
+          : isFailed
+          ? 'bg-amber-50/80 dark:bg-amber-950/25 border-amber-300 dark:border-amber-800'
+          : 'bg-[#FAF9F5] dark:bg-[#1A1A18] border-[#DCD8CF] dark:border-[#383834]'
+      }`}
+    >
+      {/* Header */}
+      <div className="flex items-center justify-between text-[10px] font-bold uppercase tracking-wider text-[#8A8882] mb-2">
+        <span className="flex items-center gap-1.5">
+          <Wand2 className="w-3.5 h-3.5 text-[#C5A059]" />
+          <span>SUGGESTED LITERARY REVISION</span>
+        </span>
+        {isApplied && (
+          <span className="text-emerald-600 dark:text-emerald-400 font-bold flex items-center gap-1">
+            <Check className="w-3.5 h-3.5" /> APPLIED
+          </span>
+        )}
+        {isRejected && <span className="text-red-500 font-bold">Rejected</span>}
+        {isFailed && <span className="text-amber-600 dark:text-amber-400 font-bold">Unapplied</span>}
+      </div>
+
+      {/* Original text block */}
+      {suggestion.originalText && (
+        <div className="mb-2 p-2 bg-red-50/50 dark:bg-red-950/15 rounded border-l-2 border-red-400 text-[#7A2E2E] dark:text-[#E8A5A5]">
+          <div className="text-[9px] font-mono uppercase font-bold text-[#A84A4A] mb-0.5">
+            Original:
+          </div>
+          <p className="italic font-serif text-[11px] leading-relaxed">{suggestion.originalText}</p>
+        </div>
+      )}
+
+      {/* Suggested replacement text block */}
+      <div className="p-2.5 bg-emerald-50/60 dark:bg-emerald-950/25 rounded border-l-2 border-emerald-500 text-[#1B4D3E] dark:text-[#A7E2C9]">
+        <div className="text-[9px] font-mono uppercase font-bold text-emerald-700 dark:text-emerald-300 mb-0.5">
+          Suggested:
+        </div>
+        <p className="serif italic text-xs leading-relaxed font-serif">
+          {suggestion.suggestedText}
+        </p>
+      </div>
+
+      {/* Rationale if present */}
+      {suggestion.rationale && (
+        <p className="mt-2 text-[10px] text-[#8A8882] dark:text-[#9E9B95] italic font-serif leading-relaxed">
+          Why: {suggestion.rationale}
+        </p>
+      )}
+
+      {/* Error notification if application failed */}
+      {isFailed && (
+        <div className="mt-2 p-1.5 bg-amber-100/80 dark:bg-amber-900/40 text-amber-900 dark:text-amber-200 text-[11px] rounded border border-amber-300 dark:border-amber-700 flex items-start gap-1.5">
+          <AlertTriangle className="w-3.5 h-3.5 text-amber-600 shrink-0 mt-0.5" />
+          <span>{errorMessage || 'Apply failed — try again'}</span>
+        </div>
+      )}
+
+      {/* Interactive buttons */}
+      {!isApplied && !isRejected && (
+        <div className="mt-3 flex items-center justify-end gap-2 pt-2 border-t border-[#EAE6DD] dark:border-[#2C2C28]">
+          <button
+            onClick={() => onReject(suggestion.id)}
+            disabled={isApplying}
+            className="px-2.5 py-1 text-[10px] font-medium rounded text-[#8A8882] hover:text-[#1A1A1A] dark:hover:text-[#ECE9E2] hover:bg-[#EBE8E0] dark:hover:bg-[#282824] transition-colors cursor-pointer disabled:opacity-40"
+          >
+            Reject
+          </button>
+          <button
+            onClick={() => onCopy(suggestion.id, suggestion.suggestedText)}
+            disabled={isApplying}
+            className="px-2.5 py-1 text-[10px] font-medium rounded text-[#3A3A36] dark:text-[#ECE9E2] hover:bg-[#EBE8E0] dark:hover:bg-[#282824] flex items-center gap-1 transition-colors cursor-pointer disabled:opacity-40"
+          >
+            {isCopied ? (
+              <Check className="w-3 h-3 text-emerald-500" />
+            ) : (
+              <Copy className="w-3 h-3" />
+            )}
+            <span>{isCopied ? 'Copied' : 'Copy'}</span>
+          </button>
+          <button
+            onClick={() => onApply(suggestion)}
+            disabled={isApplying}
+            className={`px-3.5 py-1.5 text-[11px] font-bold rounded flex items-center gap-1.5 transition-all shadow-2xs ${
+              isApplying
+                ? 'bg-[#8A8882] text-white cursor-wait'
+                : 'bg-[#3A3A36] text-white dark:bg-[#ECE9E2] dark:text-[#1A1A1A] hover:bg-black dark:hover:bg-white cursor-pointer active:scale-95'
+            }`}
+          >
+            {isApplying ? (
+              <>
+                <RefreshCw className="w-3 h-3 animate-spin" />
+                <span>Applying...</span>
+              </>
+            ) : (
+              <>
+                <CheckCheck className="w-3.5 h-3.5" />
+                <span>{isFailed ? 'Retry Apply' : 'Apply'}</span>
+              </>
+            )}
+          </button>
+        </div>
+      )}
+    </div>
+  );
+};
+
 export const AiAssistantPanel: React.FC<AiAssistantPanelProps> = ({
   isOpen,
   onClose,
@@ -123,8 +264,9 @@ export const AiAssistantPanel: React.FC<AiAssistantPanelProps> = ({
   const [inputPrompt, setInputPrompt] = useState('');
   const [isGenerating, setIsGenerating] = useState(false);
   const [copiedId, setCopiedId] = useState<string | null>(null);
-  const [appliedIds, setAppliedIds] = useState<Set<string>>(new Set());
-  const [rejectedIds, setRejectedIds] = useState<Set<string>>(new Set());
+  const [suggestionStates, setSuggestionStates] = useState<
+    Record<string, { status: 'pending' | 'applying' | 'applied' | 'rejected' | 'failed'; errorMessage?: string }>
+  >({});
 
   // Translator state
   const [sourceLang, setSourceLang] = useState('Hindi');
@@ -240,41 +382,92 @@ export const AiAssistantPanel: React.FC<AiAssistantPanelProps> = ({
       onChunk: (chunkText) => {
         currentStreamContent += chunkText;
         setMessages((prev) =>
-          prev.map((m) =>
-            m.id === modelMessageId
-              ? {
-                  ...m,
-                  content: currentStreamContent,
-                  suggestions: extractSuggestionsFromText(currentStreamContent),
-                }
-              : m
-          )
+          prev.map((m) => {
+            if (m.id !== modelMessageId) return m;
+
+            // Extract any <<<SUGGESTION>>> blocks from current stream content
+            const extracted = extractSuggestionsFromText(currentStreamContent);
+            const currentList = m.suggestions ? [...m.suggestions] : [];
+
+            // Add newly discovered suggestions without overriding or dropping existing ones
+            for (const item of extracted) {
+              if (
+                !currentList.some(
+                  (existing) =>
+                    existing.id === item.id ||
+                    (existing.suggestedText.trim() === item.suggestedText.trim() &&
+                      (existing.originalText || '').trim() === (item.originalText || '').trim())
+                )
+              ) {
+                currentList.push(item);
+              }
+            }
+
+            return {
+              ...m,
+              content: currentStreamContent,
+              suggestions: currentList,
+            };
+          })
         );
       },
       onToolCall: (toolCall) => {
         console.log('AI requested tool call:', toolCall);
         if (toolCall.name === 'propose_manuscript_edit' && toolCall.args?.suggestedText) {
+          const suggestedText = toolCall.args.suggestedText;
+          const originalText = toolCall.args.originalText || selectedText || '';
           const newSuggestion: AiSuggestion = {
-            id: 'sugg_' + Date.now() + '_' + Math.random().toString(36).substring(2, 6),
+            id: generateStableSuggestionId(suggestedText, originalText),
             target: toolCall.args.target === 'title' ? 'title' : toolCall.args.target === 'chapter' ? 'chapter' : 'selection',
-            originalText: toolCall.args.originalText || selectedText || '',
-            suggestedText: toolCall.args.suggestedText,
+            originalText,
+            suggestedText,
             rationale: toolCall.args.rationale || 'Proposed refinement by assistant.',
             status: 'pending',
           };
           setMessages((prev) =>
-            prev.map((m) =>
-              m.id === modelMessageId
-                ? {
-                    ...m,
-                    content: m.content || `I've prepared a suggested revision for your manuscript:`,
-                    suggestions: [...(m.suggestions || []), newSuggestion],
-                  }
-                : m
-            )
+            prev.map((m) => {
+              if (m.id !== modelMessageId) return m;
+              const currentList = m.suggestions ? [...m.suggestions] : [];
+              if (
+                !currentList.some(
+                  (existing) =>
+                    existing.id === newSuggestion.id ||
+                    (existing.suggestedText.trim() === newSuggestion.suggestedText.trim() &&
+                      (existing.originalText || '').trim() === (newSuggestion.originalText || '').trim())
+                )
+              ) {
+                currentList.push(newSuggestion);
+              }
+              return {
+                ...m,
+                content: m.content || `I've prepared a suggested revision for your manuscript:`,
+                suggestions: currentList,
+              };
+            })
           );
-        } else if (toolCall.name === 'propose_create_chapter' && toolCall.args?.title && onCreateChapterFromAi) {
-          onCreateChapterFromAi(toolCall.args.title, toolCall.args.initialContent);
+        } else if (toolCall.name === 'propose_create_chapter' && toolCall.args?.title) {
+          const newSuggestion: AiSuggestion = {
+            id: generateStableSuggestionId(toolCall.args.initialContent || '', toolCall.args.title),
+            target: 'chapter',
+            originalText: `Proposed Chapter: "${toolCall.args.title}"`,
+            suggestedText: toolCall.args.initialContent || '',
+            rationale: `Proposed new chapter: "${toolCall.args.title}". Click Apply if you would like to create this chapter.`,
+            status: 'pending',
+          };
+          setMessages((prev) =>
+            prev.map((m) => {
+              if (m.id !== modelMessageId) return m;
+              const currentList = m.suggestions ? [...m.suggestions] : [];
+              if (!currentList.some((existing) => existing.id === newSuggestion.id)) {
+                currentList.push(newSuggestion);
+              }
+              return {
+                ...m,
+                content: m.content || `I've prepared a new chapter proposal:`,
+                suggestions: currentList,
+              };
+            })
+          );
         }
       },
       onDone: (fullText) => {
@@ -284,9 +477,16 @@ export const AiAssistantPanel: React.FC<AiAssistantPanelProps> = ({
           prev.map((m) => {
             if (m.id !== modelMessageId) return m;
             const extracted = extractSuggestionsFromText(fullText || currentStreamContent);
-            const combinedSuggestions = [...(m.suggestions || [])];
+            const combinedSuggestions = m.suggestions ? [...m.suggestions] : [];
             for (const s of extracted) {
-              if (!combinedSuggestions.some((existing) => existing.suggestedText === s.suggestedText)) {
+              if (
+                !combinedSuggestions.some(
+                  (existing) =>
+                    existing.id === s.id ||
+                    (existing.suggestedText.trim() === s.suggestedText.trim() &&
+                      (existing.originalText || '').trim() === (s.originalText || '').trim())
+                )
+              ) {
                 combinedSuggestions.push(s);
               }
             }
@@ -355,13 +555,95 @@ export const AiAssistantPanel: React.FC<AiAssistantPanelProps> = ({
     setTimeout(() => setCopiedId(null), 2000);
   };
 
-  const handleApplySingleSuggestion = (suggestion: AiSuggestion) => {
-    onApplySuggestion(suggestion);
-    setAppliedIds((prev) => new Set(prev).add(suggestion.id));
+  const handleApplySingleSuggestion = async (suggestion: AiSuggestion) => {
+    const currentState = suggestionStates[suggestion.id]?.status || suggestion.status || 'pending';
+    if (currentState === 'applying' || currentState === 'applied') return;
+
+    // Set state to 'applying' to prevent duplicate clicks and show spinner
+    setSuggestionStates((prev) => ({
+      ...prev,
+      [suggestion.id]: { status: 'applying' },
+    }));
+    setMessages((prev) =>
+      prev.map((msg) => ({
+        ...msg,
+        suggestions: msg.suggestions?.map((s) =>
+          s.id === suggestion.id ? { ...s, status: 'applying' as const } : s
+        ),
+      }))
+    );
+
+    try {
+      const result = await onApplySuggestion(suggestion);
+      const isSuccess =
+        result === undefined ||
+        result === true ||
+        (typeof result === 'object' && result !== null && (result as any).success === true);
+
+      if (isSuccess) {
+        setSuggestionStates((prev) => ({
+          ...prev,
+          [suggestion.id]: { status: 'applied' },
+        }));
+        setMessages((prev) =>
+          prev.map((msg) => ({
+            ...msg,
+            suggestions: msg.suggestions?.map((s) =>
+              s.id === suggestion.id ? { ...s, status: 'applied' as const, errorMessage: undefined } : s
+            ),
+          }))
+        );
+      } else {
+        const errorMsg =
+          (typeof result === 'object' && (result as any)?.error) ||
+          'Apply failed — try again';
+        setSuggestionStates((prev) => ({
+          ...prev,
+          [suggestion.id]: { status: 'failed', errorMessage: errorMsg },
+        }));
+        setMessages((prev) =>
+          prev.map((msg) => ({
+            ...msg,
+            suggestions: msg.suggestions?.map((s) =>
+              s.id === suggestion.id ? { ...s, status: 'failed' as const, errorMessage: errorMsg } : s
+            ),
+          }))
+        );
+      }
+    } catch (err: any) {
+      console.error('[MYNOOK AI] Apply suggestion failed:', err);
+      const errorMsg = err?.message || 'Apply failed — try again';
+      setSuggestionStates((prev) => ({
+        ...prev,
+        [suggestion.id]: {
+          status: 'failed',
+          errorMessage: errorMsg,
+        },
+      }));
+      setMessages((prev) =>
+        prev.map((msg) => ({
+          ...msg,
+          suggestions: msg.suggestions?.map((s) =>
+            s.id === suggestion.id ? { ...s, status: 'failed' as const, errorMessage: errorMsg } : s
+          ),
+        }))
+      );
+    }
   };
 
   const handleRejectSingleSuggestion = (suggestionId: string) => {
-    setRejectedIds((prev) => new Set(prev).add(suggestionId));
+    setSuggestionStates((prev) => ({
+      ...prev,
+      [suggestionId]: { status: 'rejected' },
+    }));
+    setMessages((prev) =>
+      prev.map((msg) => ({
+        ...msg,
+        suggestions: msg.suggestions?.map((s) =>
+          s.id === suggestionId ? { ...s, status: 'rejected' as const } : s
+        ),
+      }))
+    );
   };
 
   // Translator handlers
@@ -573,88 +855,23 @@ export const AiAssistantPanel: React.FC<AiAssistantPanelProps> = ({
 
                       {/* Suggestions / Diff Cards */}
                       {msg.suggestions && msg.suggestions.length > 0 && (
-                        <div className="mt-3 space-y-2 pt-2 border-t border-[#E5E1D8] dark:border-[#2E2E2A]">
+                        <div className="mt-3 space-y-2.5 pt-2 border-t border-[#E5E1D8] dark:border-[#2E2E2A]">
                           {msg.suggestions.map((sugg) => {
-                            const isApplied = appliedIds.has(sugg.id);
-                            const isRejected = rejectedIds.has(sugg.id);
-
+                            const itemState = suggestionStates[sugg.id] || {
+                              status: sugg.status || 'pending',
+                              errorMessage: sugg.errorMessage,
+                            };
                             return (
-                              <div
+                              <SuggestionCard
                                 key={sugg.id}
-                                className={`p-2.5 rounded-sm border transition-all text-xs ${
-                                  isApplied
-                                    ? 'bg-emerald-50 dark:bg-emerald-950/20 border-emerald-300 dark:border-emerald-800'
-                                    : isRejected
-                                    ? 'bg-red-50 dark:bg-red-950/20 border-red-200 dark:border-red-900 opacity-60'
-                                    : 'bg-[#FAF9F5] dark:bg-[#1A1A18] border-[#DCD8CF] dark:border-[#383834]'
-                                }`}
-                              >
-                                <div className="flex items-center justify-between text-[10px] font-bold uppercase tracking-wider text-[#8A8882] mb-1.5">
-                                  <span className="flex items-center gap-1">
-                                    <Wand2 className="w-3 h-3 text-[#C5A059]" />
-                                    Suggested Literary Revision
-                                  </span>
-                                  {isApplied && (
-                                    <span className="text-emerald-600 dark:text-emerald-400 font-bold flex items-center gap-0.5">
-                                      <Check className="w-3 h-3" /> Applied
-                                    </span>
-                                  )}
-                                  {isRejected && <span className="text-red-500 font-bold">Rejected</span>}
-                                </div>
-
-                                {sugg.originalText && (
-                                  <div className="mb-2 p-1.5 bg-red-50/50 dark:bg-red-950/10 rounded border-l-2 border-red-400 text-[#7A2E2E] dark:text-[#E8A5A5]">
-                                    <div className="text-[9px] font-mono uppercase font-bold text-[#A84A4A] mb-0.5">
-                                      Original
-                                    </div>
-                                    <p className="italic font-serif text-[11px]">{sugg.originalText}</p>
-                                  </div>
-                                )}
-
-                                <div className="p-2 bg-emerald-50/60 dark:bg-emerald-950/20 rounded border-l-2 border-emerald-500 text-[#1B4D3E] dark:text-[#A7E2C9]">
-                                  <div className="text-[9px] font-mono uppercase font-bold text-emerald-700 dark:text-emerald-300 mb-0.5">
-                                    Proposed Replacement
-                                  </div>
-                                  <p className="serif italic text-xs leading-relaxed">
-                                    {sugg.suggestedText}
-                                  </p>
-                                </div>
-
-                                {sugg.rationale && (
-                                  <p className="mt-1.5 text-[10px] text-[#8A8882] dark:text-[#9E9B95] italic font-serif">
-                                    Why: {sugg.rationale}
-                                  </p>
-                                )}
-
-                                {!isApplied && !isRejected && (
-                                  <div className="mt-2.5 flex items-center justify-end gap-1.5 pt-1">
-                                    <button
-                                      onClick={() => handleRejectSingleSuggestion(sugg.id)}
-                                      className="px-2.5 py-1 text-[10px] font-medium rounded text-[#8A8882] hover:text-[#1A1A1A] dark:hover:text-[#ECE9E2] hover:bg-[#EBE8E0] dark:hover:bg-[#282824] transition-colors cursor-pointer"
-                                    >
-                                      Reject
-                                    </button>
-                                    <button
-                                      onClick={() => handleCopyText(sugg.id, sugg.suggestedText)}
-                                      className="px-2.5 py-1 text-[10px] font-medium rounded text-[#3A3A36] dark:text-[#ECE9E2] hover:bg-[#EBE8E0] dark:hover:bg-[#282824] flex items-center gap-1 transition-colors cursor-pointer"
-                                    >
-                                      {copiedId === sugg.id ? (
-                                        <Check className="w-3 h-3 text-emerald-500" />
-                                      ) : (
-                                        <Copy className="w-3 h-3" />
-                                      )}
-                                      <span>{copiedId === sugg.id ? 'Copied' : 'Copy'}</span>
-                                    </button>
-                                    <button
-                                      onClick={() => handleApplySingleSuggestion(sugg)}
-                                      className="px-3 py-1 text-[10px] font-bold rounded bg-[#3A3A36] text-white dark:bg-[#ECE9E2] dark:text-[#1A1A1A] hover:bg-black dark:hover:bg-white flex items-center gap-1 transition-colors cursor-pointer shadow-2xs"
-                                    >
-                                      <CheckCheck className="w-3 h-3" />
-                                      <span>Apply Change</span>
-                                    </button>
-                                  </div>
-                                )}
-                              </div>
+                                suggestion={sugg}
+                                status={itemState.status}
+                                errorMessage={itemState.errorMessage || sugg.errorMessage}
+                                onApply={handleApplySingleSuggestion}
+                                onReject={handleRejectSingleSuggestion}
+                                onCopy={handleCopyText}
+                                isCopied={copiedId === sugg.id}
+                              />
                             );
                           })}
                         </div>

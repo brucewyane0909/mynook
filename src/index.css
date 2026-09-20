@@ -32,6 +32,31 @@
   }
 }
 
+:root {
+  --sidebar-width: 260px;
+}
+
+.sidebar-collapsed {
+  --sidebar-width: 64px;
+}
+
+@media (max-width: 700px) {
+  :root {
+    --sidebar-width: 260px;
+  }
+  .sidebar-collapsed {
+    --sidebar-width: 56px;
+  }
+}
+
+.scrollbar-none::-webkit-scrollbar {
+  display: none;
+}
+.scrollbar-none {
+  -ms-overflow-style: none;
+  scrollbar-width: none;
+}
+
 .serif {
   font-family: "Libre Baskerville", "Georgia", serif;
 }

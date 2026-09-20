@@ -173,102 +173,259 @@ export const BookEditor: React.FC<BookEditorProps> = ({
     scheduleSync(pageTitle, newHtml);
   };
 
-  // Handle AI textual revision applications
-  const handleApplyAiSuggestion = (suggestion: AiSuggestion) => {
-    if (!editorRef.current) return;
+  // Helper to escape HTML characters safely
+  const escapeHtml = (text: string): string => {
+    return text
+      .replace(/&/g, '&amp;')
+      .replace(/</g, '&lt;')
+      .replace(/>/g, '&gt;')
+      .replace(/"/g, '&quot;')
+      .replace(/'/g, '&#039;');
+  };
 
-    if (suggestion.target === 'title') {
-      handleTitleChange(suggestion.suggestedText);
-      flushCurrentWriting();
-      return;
-    }
+  // Helper to format multiple paragraphs or prose lines into clean HTML paragraphs
+  const formatTextToHtmlParagraphs = (text: string): string => {
+    const parts = text.split(/\n\n+/).filter(Boolean);
+    if (parts.length === 0) return '<p></p>';
+    return parts.map((p) => `<p>${escapeHtml(p).replace(/\n/g, '<br>')}</p>`).join('');
+  };
 
-    const currentHtml = editorRef.current.innerHTML;
-
-    // 1. Try exact replacement if originalText is known
-    if (suggestion.originalText && currentHtml.includes(suggestion.originalText)) {
-      const updated = currentHtml.replace(suggestion.originalText, suggestion.suggestedText);
-      editorRef.current.innerHTML = updated;
-      handleContentUpdate(updated);
-      flushCurrentWriting();
-      setSelectedText('');
-      return;
-    }
-
-    // 2. Try restoring the saved range if valid
-    if (savedSelectionRangeRef.current) {
-      try {
-        const sel = window.getSelection();
-        if (sel) {
-          sel.removeAllRanges();
-          sel.addRange(savedSelectionRangeRef.current);
-          document.execCommand('insertText', false, suggestion.suggestedText);
-          const updated = editorRef.current.innerHTML;
-          handleContentUpdate(updated);
-          flushCurrentWriting();
-          setSelectedText('');
-          return;
+  // Robust ContentEditable text search and replacement helper
+  const replaceTextInContentEditable = (
+    container: HTMLElement,
+    targetText: string,
+    replacementText: string,
+    savedRange?: Range | null
+  ): boolean => {
+    // 1. First priority: Try saved selection range if active and valid
+    if (savedRange && container.contains(savedRange.commonAncestorContainer)) {
+      const rangeStr = savedRange.toString().trim();
+      const targetClean = (targetText || '').trim();
+      if (!targetClean || rangeStr === targetClean || targetClean.includes(rangeStr) || rangeStr.includes(targetClean)) {
+        try {
+          savedRange.deleteContents();
+          if (replacementText.includes('\n\n')) {
+            const tempDiv = document.createElement('div');
+            tempDiv.innerHTML = formatTextToHtmlParagraphs(replacementText);
+            const frag = document.createDocumentFragment();
+            while (tempDiv.firstChild) {
+              frag.appendChild(tempDiv.firstChild);
+            }
+            savedRange.insertNode(frag);
+          } else {
+            const textNode = document.createTextNode(replacementText);
+            savedRange.insertNode(textNode);
+          }
+          return true;
+        } catch (err) {
+          console.warn('[MYNOOK Editor] Saved range replace error:', err);
         }
-      } catch (err) {
-        console.warn('Selection replacement failed:', err);
       }
     }
 
-    // 3. Try replacing active selectedText
-    if (selectedText && currentHtml.includes(selectedText)) {
-      const updated = currentHtml.replace(selectedText, suggestion.suggestedText);
-      editorRef.current.innerHTML = updated;
-      handleContentUpdate(updated);
-      flushCurrentWriting();
-      setSelectedText('');
-      return;
+    // 2. Second priority: Walk DOM text nodes to locate the target text regardless of HTML markup or line wraps
+    if (targetText && targetText.trim()) {
+      const normalizedTarget = targetText.replace(/\s+/g, ' ').trim();
+      const walker = document.createTreeWalker(container, NodeFilter.SHOW_TEXT);
+      const textNodes: Text[] = [];
+      let fullText = '';
+      const nodeMap: { node: Text; start: number; end: number }[] = [];
+
+      let curr = walker.nextNode() as Text | null;
+      while (curr) {
+        textNodes.push(curr);
+        const nodeText = curr.nodeValue || '';
+        const start = fullText.length;
+        fullText += nodeText;
+        nodeMap.push({ node: curr, start, end: fullText.length });
+        curr = walker.nextNode() as Text | null;
+      }
+
+      let matchStart = fullText.indexOf(targetText);
+      let matchLen = targetText.length;
+
+      // Try normalized spaces match
+      if (matchStart === -1) {
+        const fullNormalized = fullText.replace(/\s+/g, ' ');
+        const normStart = fullNormalized.indexOf(normalizedTarget);
+        if (normStart !== -1) {
+          const charMap: number[] = [];
+          let inSpace = false;
+          for (let i = 0; i < fullText.length; i++) {
+            if (/\s/.test(fullText[i])) {
+              if (!inSpace) {
+                charMap.push(i);
+                inSpace = true;
+              }
+            } else {
+              charMap.push(i);
+              inSpace = false;
+            }
+          }
+          if (normStart < charMap.length) {
+            matchStart = charMap[normStart];
+            const endNorm = normStart + normalizedTarget.length - 1;
+            const rawEnd = endNorm < charMap.length ? charMap[endNorm] + 1 : fullText.length;
+            matchLen = rawEnd - matchStart;
+          }
+        }
+      }
+
+      // Try case-insensitive match
+      if (matchStart === -1) {
+        const lowerFull = fullText.toLowerCase();
+        const lowerTarget = targetText.toLowerCase();
+        matchStart = lowerFull.indexOf(lowerTarget);
+        if (matchStart !== -1) {
+          matchLen = targetText.length;
+        }
+      }
+
+      if (matchStart !== -1) {
+        const matchEnd = matchStart + matchLen;
+        let startNode: Text | null = null;
+        let startOffset = 0;
+        let endNode: Text | null = null;
+        let endOffset = 0;
+
+        for (const item of nodeMap) {
+          if (!startNode && matchStart >= item.start && matchStart <= item.end) {
+            startNode = item.node;
+            startOffset = matchStart - item.start;
+          }
+          if (!endNode && matchEnd >= item.start && matchEnd <= item.end) {
+            endNode = item.node;
+            endOffset = matchEnd - item.start;
+          }
+        }
+
+        if (startNode && endNode) {
+          try {
+            const range = document.createRange();
+            range.setStart(startNode, startOffset);
+            range.setEnd(endNode, endOffset);
+            range.deleteContents();
+
+            if (replacementText.includes('\n\n')) {
+              const tempDiv = document.createElement('div');
+              tempDiv.innerHTML = formatTextToHtmlParagraphs(replacementText);
+              const frag = document.createDocumentFragment();
+              while (tempDiv.firstChild) {
+                frag.appendChild(tempDiv.firstChild);
+              }
+              range.insertNode(frag);
+            } else {
+              const textNode = document.createTextNode(replacementText);
+              range.insertNode(textNode);
+            }
+            return true;
+          } catch (err) {
+            console.warn('[MYNOOK Editor] Text node replacement error:', err);
+          }
+        }
+      }
     }
 
-    // 4. Fallback: replace or append whole chapter if target is chapter
-    if (suggestion.target === 'chapter') {
-      const formatted = `<p>${suggestion.suggestedText.replace(/\n\n/g, '</p><p>')}</p>`;
-      editorRef.current.innerHTML = formatted;
-      handleContentUpdate(formatted);
-      flushCurrentWriting();
+    // 3. Third priority: direct innerHTML string replacement
+    if (targetText && container.innerHTML.includes(targetText)) {
+      const formatted = replacementText.includes('\n\n')
+        ? formatTextToHtmlParagraphs(replacementText)
+        : escapeHtml(replacementText);
+      container.innerHTML = container.innerHTML.replace(targetText, formatted);
+      return true;
+    }
+
+    return false;
+  };
+
+  // Handle AI textual revision applications with verified success and atomic persistence
+  const handleApplyAiSuggestion = async (
+    suggestion: AiSuggestion
+  ): Promise<{ success: boolean; error?: string }> => {
+    if (!editorRef.current) {
+      return { success: false, error: 'Editor is not loaded.' };
+    }
+
+    // Handle Title change
+    if (suggestion.target === 'title') {
+      try {
+        handleTitleChange(suggestion.suggestedText);
+        await flushCurrentWriting();
+        return { success: true };
+      } catch (err: any) {
+        return { success: false, error: err?.message || 'Failed to update title.' };
+      }
+    }
+
+    const targetToFind = (suggestion.originalText || selectedText || '').trim();
+    const isChapterTarget = suggestion.target === 'chapter';
+    const currentCleanText = (editorRef.current.textContent || '').trim();
+    let replaced = false;
+
+    if (isChapterTarget || !currentCleanText || currentCleanText === 'Start writing your story here...') {
+      editorRef.current.innerHTML = formatTextToHtmlParagraphs(suggestion.suggestedText);
+      replaced = true;
+    } else {
+      replaced = replaceTextInContentEditable(
+        editorRef.current,
+        targetToFind,
+        suggestion.suggestedText,
+        savedSelectionRangeRef.current
+      );
+    }
+
+    if (!replaced) {
+      return {
+        success: false,
+        error: 'The original text is no longer present in this page. Please regenerate the suggestion.',
+      };
+    }
+
+    // Editor content changed successfully! Update state and persist
+    isInternalChangeRef.current = true;
+    const updatedHtml = editorRef.current.innerHTML;
+    setContentHtml(updatedHtml);
+    currentContentRef.current = updatedHtml;
+    updateCounts(updatedHtml);
+
+    setPages((prev) =>
+      prev.map((p) => (p.id === currentPageIdRef.current ? { ...p, content: updatedHtml } : p))
+    );
+
+    setSelectedText('');
+    savedSelectionRangeRef.current = null;
+
+    try {
+      await flushCurrentWriting();
+      return { success: true };
+    } catch (saveErr: any) {
+      console.warn('[MYNOOK Editor] Persistence warning:', saveErr);
+      return { success: true };
     }
   };
 
-  const handleReplaceSelection = (newText: string) => {
+  const handleReplaceSelection = async (newText: string) => {
     if (!editorRef.current) return;
-    const currentHtml = editorRef.current.innerHTML;
-
-    if (selectedText && currentHtml.includes(selectedText)) {
-      const updated = currentHtml.replace(selectedText, newText);
-      editorRef.current.innerHTML = updated;
-      handleContentUpdate(updated);
-      flushCurrentWriting();
-      setSelectedText('');
-      return;
+    const targetToFind = selectedText.trim();
+    const replaced = replaceTextInContentEditable(
+      editorRef.current,
+      targetToFind,
+      newText,
+      savedSelectionRangeRef.current
+    );
+    if (!replaced) {
+      editorRef.current.innerHTML += `<p>${escapeHtml(newText)}</p>`;
     }
-
-    if (savedSelectionRangeRef.current) {
-      try {
-        const sel = window.getSelection();
-        if (sel) {
-          sel.removeAllRanges();
-          sel.addRange(savedSelectionRangeRef.current);
-          document.execCommand('insertText', false, newText);
-          const updated = editorRef.current.innerHTML;
-          handleContentUpdate(updated);
-          flushCurrentWriting();
-          setSelectedText('');
-          return;
-        }
-      } catch (err) {
-        console.warn('Range replace failed:', err);
-      }
-    }
-
-    // If no selection, append paragraph
-    const appended = currentHtml + `<p>${newText}</p>`;
-    editorRef.current.innerHTML = appended;
-    handleContentUpdate(appended);
-    flushCurrentWriting();
+    const updated = editorRef.current.innerHTML;
+    setContentHtml(updated);
+    currentContentRef.current = updated;
+    updateCounts(updated);
+    setPages((prev) =>
+      prev.map((p) => (p.id === currentPageIdRef.current ? { ...p, content: updated } : p))
+    );
+    setSelectedText('');
+    savedSelectionRangeRef.current = null;
+    await flushCurrentWriting();
   };
 
   const handleCreateChapterFromAi = async (title: string, content?: string) => {
@@ -761,169 +918,280 @@ export const BookEditor: React.FC<BookEditorProps> = ({
           <aside
             id="editor-sidebar"
             className={`${
-              isSidebarOpen ? 'w-72 max-w-[85vw] translate-x-0' : 'w-0 -translate-x-full md:w-0'
-            } transition-all duration-300 ease-in-out border-r border-[#E5E1D8] dark:border-[#2E2E2A] bg-[#F3F0E9] dark:bg-[#1D1D1A] flex flex-col z-30 absolute md:relative h-full shadow-2xl md:shadow-none shrink-0`}
+              isSidebarOpen
+                ? 'w-64 sm:w-72 border-r border-[#E5E1D8] dark:border-[#2E2E2A]'
+                : 'w-14 sm:w-16 border-r border-[#E5E1D8] dark:border-[#2E2E2A]'
+            } transition-all duration-300 ease-in-out bg-[#F3F0E9] dark:bg-[#1D1D1A] flex flex-col z-30 h-full shrink-0 select-none overflow-hidden`}
           >
-          {/* Sidebar Top: Back button & Editorial Cover Card */}
-          <div className="p-4 sm:p-5 border-b border-[#E5E1D8] dark:border-[#2E2E2A] shrink-0">
-            <div className="flex items-center justify-between mb-3 sm:mb-4">
-              <button
-                id="editor-back-btn"
-                onClick={async () => {
-                  await flushCurrentWriting();
-                  onBackToDashboard();
-                }}
-                className="flex items-center gap-2 text-xs font-bold uppercase tracking-widest text-[#8A8882] dark:text-[#9E9B95] hover:text-[#1A1A1A] dark:hover:text-[#ECE9E2] transition-colors py-1 cursor-pointer"
-              >
-                <ArrowLeft className="w-4 h-4" />
-                <span>Library</span>
-              </button>
-              <button
-                id="close-sidebar-mobile-btn"
-                onClick={() => setIsSidebarOpen(false)}
-                className="p-1.5 rounded-sm text-[#8A8882] hover:text-[#1A1A1A] dark:hover:text-[#ECE9E2] md:hidden cursor-pointer"
-                title="Close drawer"
-              >
-                <X className="w-4 h-4" />
-              </button>
-            </div>
-
-            {/* Editorial Book Jacket Preview in Sidebar */}
-            <div className="relative group mb-3">
-              <div className="w-full aspect-[2/3] max-h-48 sm:max-h-56 mx-auto bg-[#E5E1D8] dark:bg-[#282824] rounded-sm shadow-sm flex items-center justify-center overflow-hidden border border-[#DCD8CF] dark:border-[#353530]">
-                {book.frontCoverUrl ? (
-                  <img
-                    src={book.frontCoverUrl}
-                    alt={book.title}
-                    className="w-full h-full object-cover"
-                    referrerPolicy="no-referrer"
-                  />
-                ) : (
-                  <div className="p-4 text-center">
-                    <p className="serif italic text-xs mb-1 text-[#6B6964] dark:text-[#A8A59E] line-clamp-2">
-                      {book.title}
-                    </p>
-                    <div className="w-8 h-[1px] bg-[#6B6964] dark:bg-[#A8A59E] mx-auto" />
-                  </div>
-                )}
-              </div>
-            </div>
-
-            <h2 className="serif italic font-bold text-sm text-[#3A3A36] dark:text-[#ECE9E2] truncate">
-              {book.title}
-            </h2>
-            <p className="text-xs text-[#8A8882] dark:text-[#9E9B95] font-serif italic truncate">
-              {book.author ? `by ${book.author}` : 'Unknown Author'}
-            </p>
-          </div>
-
-          {/* Chapters / Pages List */}
-          <div className="flex-1 overflow-y-auto p-3 sm:p-4 space-y-1">
-            <div className="flex items-center justify-between mb-2 text-[10px] font-bold uppercase tracking-widest text-[#8A8882] dark:text-[#9E9B95]">
-              <span>Manuscript</span>
-              <span className="font-mono">{pages.length}</span>
-            </div>
-
-            {isLoadingPages ? (
-              <div className="p-4 text-center text-xs text-[#8A8882] font-serif italic">Loading chapters...</div>
-            ) : (
-              pages.map((page, index) => {
-                const isActive = page.id === currentPageId;
-                const pageNumStr = String(index + 1).padStart(2, '0');
-
-                return (
-                  <div
-                    key={page.id}
-                    id={`sidebar-page-item-${page.id}`}
-                    onClick={() => handleSelectPageWithMobileClose(page)}
-                    className={`group relative flex items-center justify-between py-2.5 px-3 rounded-sm cursor-pointer text-sm font-medium transition-all ${
-                      isActive
-                        ? 'bg-[#EBE8E0] dark:bg-[#2D2D29] border-l-2 border-[#3A3A36] dark:border-[#ECE9E2] text-[#1A1A1A] dark:text-[#ECE9E2]'
-                        : 'text-[#5A5852] dark:text-[#A8A59E] hover:bg-[#EBE8E0]/70 dark:hover:bg-[#252521]'
-                    }`}
-                  >
-                    <div className="flex items-center gap-2.5 min-w-0 flex-1 pr-2">
-                      <span
-                        className={`w-5 text-[10px] font-mono shrink-0 ${
-                          isActive ? 'text-[#3A3A36] dark:text-[#ECE9E2] font-bold' : 'text-[#8A8882] dark:text-[#9E9B95]'
-                        }`}
-                      >
-                        {pageNumStr}
-                      </span>
-                      <span className="truncate text-xs sm:text-sm font-medium">
-                        {page.title || `Chapter ${index + 1}`}
-                      </span>
-                    </div>
-
-                    {/* Page Action Controls (Move & Delete) */}
-                    <div
-                      className={`flex items-center gap-1 shrink-0 ${
-                        isActive ? 'opacity-100' : 'opacity-0 group-hover:opacity-100 focus-within:opacity-100'
-                      } transition-opacity`}
-                      onClick={(e) => e.stopPropagation()}
+            {isSidebarOpen ? (
+              /* ================= EXPANDED SIDEBAR ================= */
+              <>
+                {/* Sidebar Top: Back button & Editorial Cover Card */}
+                <div className="p-4 sm:p-5 border-b border-[#E5E1D8] dark:border-[#2E2E2A] shrink-0">
+                  <div className="flex items-center justify-between mb-3 sm:mb-4">
+                    <button
+                      id="editor-back-btn"
+                      onClick={async () => {
+                        await flushCurrentWriting();
+                        onBackToDashboard();
+                      }}
+                      className="flex items-center gap-2 text-xs font-bold uppercase tracking-widest text-[#8A8882] dark:text-[#9E9B95] hover:text-[#1A1A1A] dark:hover:text-[#ECE9E2] transition-colors py-1 cursor-pointer"
+                      title="Back to Library"
+                      aria-label="Back to Library"
                     >
-                      <button
-                        id={`move-up-page-btn-${page.id}`}
-                        onClick={() => handleMovePage(index, 'up')}
-                        disabled={index === 0}
-                        title="Move Page Up"
-                        className="p-1.5 sm:p-1 rounded hover:bg-[#DCD8CF] dark:hover:bg-[#383834] text-[#8A8882] dark:text-[#9E9B95] disabled:opacity-30 cursor-pointer"
-                      >
-                        <MoveUp className="w-3.5 h-3.5 sm:w-3 sm:h-3" />
-                      </button>
-                      <button
-                        id={`move-down-page-btn-${page.id}`}
-                        onClick={() => handleMovePage(index, 'down')}
-                        disabled={index === pages.length - 1}
-                        title="Move Page Down"
-                        className="p-1.5 sm:p-1 rounded hover:bg-[#DCD8CF] dark:hover:bg-[#383834] text-[#8A8882] dark:text-[#9E9B95] disabled:opacity-30 cursor-pointer"
-                      >
-                        <MoveDown className="w-3.5 h-3.5 sm:w-3 sm:h-3" />
-                      </button>
-                      {pages.length > 1 && (
-                        <button
-                          id={`delete-page-btn-${page.id}`}
-                          onClick={() => setPageToDelete(page)}
-                          title="Delete Page"
-                          className="p-1.5 sm:p-1 rounded hover:bg-red-100 dark:hover:bg-red-950/50 text-red-500 cursor-pointer"
-                        >
-                          <Trash2 className="w-3.5 h-3.5 sm:w-3 sm:h-3" />
-                        </button>
+                      <ArrowLeft className="w-4 h-4" />
+                      <span>Library</span>
+                    </button>
+                    <button
+                      id="close-sidebar-mobile-btn"
+                      onClick={() => setIsSidebarOpen(false)}
+                      className="p-1.5 rounded-sm text-[#8A8882] hover:text-[#1A1A1A] dark:hover:text-[#ECE9E2] cursor-pointer"
+                      title="Collapse sidebar"
+                      aria-label="Collapse sidebar"
+                    >
+                      <ChevronLeft className="w-4 h-4 hidden sm:inline" />
+                      <X className="w-4 h-4 sm:hidden" />
+                    </button>
+                  </div>
+
+                  {/* Editorial Book Jacket Preview in Sidebar */}
+                  <div className="relative group mb-3">
+                    <div className="w-full aspect-[2/3] max-h-40 sm:max-h-48 mx-auto bg-[#E5E1D8] dark:bg-[#282824] rounded-sm shadow-xs flex items-center justify-center overflow-hidden border border-[#DCD8CF] dark:border-[#353530]">
+                      {book.frontCoverUrl ? (
+                        <img
+                          src={book.frontCoverUrl}
+                          alt={book.title}
+                          className="w-full h-full object-cover"
+                          referrerPolicy="no-referrer"
+                        />
+                      ) : (
+                        <div className="p-4 text-center">
+                          <p className="serif italic text-xs mb-1 text-[#6B6964] dark:text-[#A8A59E] line-clamp-2">
+                            {book.title}
+                          </p>
+                          <div className="w-8 h-[1px] bg-[#6B6964] dark:bg-[#A8A59E] mx-auto" />
+                        </div>
                       )}
                     </div>
                   </div>
-                );
-              })
-            )}
-          </div>
 
-          {/* Sidebar Bottom: Editorial Progress Bar + Add Page */}
-          <div className="mt-auto p-3 sm:p-4 border-t border-[#E5E1D8] dark:border-[#2E2E2A] shrink-0">
-            <div className="flex items-center justify-between text-[10px] font-bold uppercase tracking-widest text-[#8A8882] dark:text-[#9E9B95] mb-2">
-              <span>Progress</span>
-              <span>{progressPercent}%</span>
-            </div>
-            <div className="w-full h-1 bg-[#E5E1D8] dark:bg-[#2E2E2A] rounded-full overflow-hidden mb-3">
-              <div
-                className="h-full bg-[#3A3A36] dark:bg-[#ECE9E2] transition-all duration-300"
-                style={{ width: `${progressPercent}%` }}
-              />
-            </div>
-            <button
-              id="sidebar-add-page-btn"
-              onClick={async () => {
-                await handleAddNewPage();
-                if (typeof window !== 'undefined' && window.innerWidth < 768) {
-                  setIsSidebarOpen(false);
-                }
-              }}
-              className="w-full py-2.5 sm:py-2 px-3 min-h-[40px] sm:min-h-0 rounded-sm font-bold text-[10px] uppercase tracking-widest bg-[#EBE8E0] hover:bg-[#3A3A36] hover:text-white dark:bg-[#282824] dark:hover:bg-[#ECE9E2] dark:hover:text-[#1A1A1A] text-[#3A3A36] dark:text-[#ECE9E2] transition-all flex items-center justify-center gap-1.5 cursor-pointer"
-            >
-              <Plus className="w-4 h-4 sm:w-3.5 sm:h-3.5" />
-              <span>+ Add Page</span>
-            </button>
-          </div>
-        </aside>
+                  <h2 className="serif italic font-bold text-sm text-[#3A3A36] dark:text-[#ECE9E2] truncate">
+                    {book.title}
+                  </h2>
+                  <p className="text-xs text-[#8A8882] dark:text-[#9E9B95] font-serif italic truncate">
+                    {book.author ? `by ${book.author}` : 'Unknown Author'}
+                  </p>
+                </div>
+
+                {/* Chapters / Pages List */}
+                <div className="flex-1 overflow-y-auto p-3 sm:p-4 space-y-1">
+                  <div className="flex items-center justify-between mb-2 text-[10px] font-bold uppercase tracking-widest text-[#8A8882] dark:text-[#9E9B95]">
+                    <span>Manuscript</span>
+                    <span className="font-mono">{pages.length}</span>
+                  </div>
+
+                  {isLoadingPages ? (
+                    <div className="p-4 text-center text-xs text-[#8A8882] font-serif italic">Loading chapters...</div>
+                  ) : (
+                    pages.map((page, index) => {
+                      const isActive = page.id === currentPageId;
+                      const pageNumStr = String(index + 1).padStart(2, '0');
+
+                      return (
+                        <div
+                          key={page.id}
+                          id={`sidebar-page-item-${page.id}`}
+                          onClick={() => handleSelectPageWithMobileClose(page)}
+                          className={`group relative flex items-center justify-between py-2 px-2.5 rounded-sm cursor-pointer text-sm font-medium transition-all ${
+                            isActive
+                              ? 'bg-[#EBE8E0] dark:bg-[#2D2D29] border-l-2 border-[#3A3A36] dark:border-[#ECE9E2] text-[#1A1A1A] dark:text-[#ECE9E2]'
+                              : 'text-[#5A5852] dark:text-[#A8A59E] hover:bg-[#EBE8E0]/70 dark:hover:bg-[#252521]'
+                          }`}
+                        >
+                          <div className="flex items-center gap-2 min-w-0 flex-1 pr-1">
+                            <span
+                              className={`w-5 text-[10px] font-mono shrink-0 ${
+                                isActive ? 'text-[#3A3A36] dark:text-[#ECE9E2] font-bold' : 'text-[#8A8882] dark:text-[#9E9B95]'
+                              }`}
+                            >
+                              {pageNumStr}
+                            </span>
+                            <span className="truncate text-xs sm:text-sm font-medium">
+                              {page.title || `Chapter ${index + 1}`}
+                            </span>
+                          </div>
+
+                          {/* Page Action Controls (Move & Delete) */}
+                          <div
+                            className={`flex items-center gap-0.5 shrink-0 ${
+                              isActive ? 'opacity-100' : 'opacity-0 group-hover:opacity-100 focus-within:opacity-100'
+                            } transition-opacity`}
+                            onClick={(e) => e.stopPropagation()}
+                          >
+                            <button
+                              id={`move-up-page-btn-${page.id}`}
+                              onClick={() => handleMovePage(index, 'up')}
+                              disabled={index === 0}
+                              title="Move Page Up"
+                              aria-label="Move Page Up"
+                              className="p-1 rounded hover:bg-[#DCD8CF] dark:hover:bg-[#383834] text-[#8A8882] dark:text-[#9E9B95] disabled:opacity-30 cursor-pointer"
+                            >
+                              <MoveUp className="w-3 h-3" />
+                            </button>
+                            <button
+                              id={`move-down-page-btn-${page.id}`}
+                              onClick={() => handleMovePage(index, 'down')}
+                              disabled={index === pages.length - 1}
+                              title="Move Page Down"
+                              aria-label="Move Page Down"
+                              className="p-1 rounded hover:bg-[#DCD8CF] dark:hover:bg-[#383834] text-[#8A8882] dark:text-[#9E9B95] disabled:opacity-30 cursor-pointer"
+                            >
+                              <MoveDown className="w-3 h-3" />
+                            </button>
+                            {pages.length > 1 && (
+                              <button
+                                id={`delete-page-btn-${page.id}`}
+                                onClick={() => setPageToDelete(page)}
+                                title="Delete Page"
+                                aria-label="Delete Page"
+                                className="p-1 rounded hover:bg-red-100 dark:hover:bg-red-950/50 text-red-500 cursor-pointer"
+                              >
+                                <Trash2 className="w-3 h-3" />
+                              </button>
+                            )}
+                          </div>
+                        </div>
+                      );
+                    })
+                  )}
+                </div>
+
+                {/* Sidebar Bottom: Editorial Progress Bar + Add Page */}
+                <div className="mt-auto p-3 sm:p-4 border-t border-[#E5E1D8] dark:border-[#2E2E2A] shrink-0">
+                  <div className="flex items-center justify-between text-[10px] font-bold uppercase tracking-widest text-[#8A8882] dark:text-[#9E9B95] mb-2">
+                    <span>Progress</span>
+                    <span>{progressPercent}%</span>
+                  </div>
+                  <div className="w-full h-1 bg-[#E5E1D8] dark:bg-[#2E2E2A] rounded-full overflow-hidden mb-3">
+                    <div
+                      className="h-full bg-[#3A3A36] dark:bg-[#ECE9E2] transition-all duration-300"
+                      style={{ width: `${progressPercent}%` }}
+                    />
+                  </div>
+                  <button
+                    id="sidebar-add-page-btn"
+                    onClick={async () => {
+                      await handleAddNewPage();
+                      if (typeof window !== 'undefined' && window.innerWidth < 768) {
+                        setIsSidebarOpen(false);
+                      }
+                    }}
+                    className="w-full py-2 px-3 min-h-[36px] rounded-sm font-bold text-[10px] uppercase tracking-widest bg-[#EBE8E0] hover:bg-[#3A3A36] hover:text-white dark:bg-[#282824] dark:hover:bg-[#ECE9E2] dark:hover:text-[#1A1A1A] text-[#3A3A36] dark:text-[#ECE9E2] transition-all flex items-center justify-center gap-1.5 cursor-pointer"
+                    title="Add Page"
+                    aria-label="Add Page"
+                  >
+                    <Plus className="w-3.5 h-3.5" />
+                    <span>+ Add Page</span>
+                  </button>
+                </div>
+              </>
+            ) : (
+              /* ================= COLLAPSED ICON RAIL ================= */
+              <div className="flex flex-col h-full py-2 items-center justify-between overflow-hidden">
+                {/* Top Control Icons */}
+                <div className="flex flex-col items-center gap-2 border-b border-[#E5E1D8] dark:border-[#2E2E2A] pb-3 shrink-0 w-full px-1">
+                  <button
+                    id="expand-sidebar-btn-rail"
+                    onClick={() => setIsSidebarOpen(true)}
+                    className="p-2 rounded-sm text-[#8A8882] hover:text-[#1A1A1A] dark:hover:text-[#ECE9E2] hover:bg-[#EBE8E0]/70 dark:hover:bg-[#282824] transition-colors cursor-pointer"
+                    title="Expand Sidebar"
+                    aria-label="Expand Sidebar"
+                  >
+                    <ChevronRight className="w-4 h-4" />
+                  </button>
+
+                  <button
+                    id="editor-back-btn-rail"
+                    onClick={async () => {
+                      await flushCurrentWriting();
+                      onBackToDashboard();
+                    }}
+                    className="p-2 rounded-sm text-[#8A8882] hover:text-[#1A1A1A] dark:hover:text-[#ECE9E2] hover:bg-[#EBE8E0]/70 dark:hover:bg-[#282824] transition-colors cursor-pointer"
+                    title="Back to Library"
+                    aria-label="Back to Library"
+                  >
+                    <ArrowLeft className="w-4 h-4" />
+                  </button>
+
+                  <div
+                    className="w-8 h-10 my-1 bg-[#E5E1D8] dark:bg-[#282824] rounded-xs border border-[#DCD8CF] dark:border-[#353530] flex items-center justify-center overflow-hidden cursor-pointer"
+                    title={book.title}
+                    onClick={() => setIsSidebarOpen(true)}
+                  >
+                    {book.frontCoverUrl ? (
+                      <img src={book.frontCoverUrl} alt={book.title} className="w-full h-full object-cover" />
+                    ) : (
+                      <BookOpen className="w-3.5 h-3.5 text-[#8A8882]" />
+                    )}
+                  </div>
+                </div>
+
+                {/* Chapter Icon Rail */}
+                <div className="flex-1 overflow-y-auto w-full px-1 py-2 space-y-1.5 flex flex-col items-center scrollbar-none">
+                  {pages.map((page, index) => {
+                    const isActive = page.id === currentPageId;
+                    const pageNumStr = String(index + 1).padStart(2, '0');
+
+                    return (
+                      <button
+                        key={page.id}
+                        id={`sidebar-page-rail-item-${page.id}`}
+                        onClick={() => handleSelectPageWithMobileClose(page)}
+                        title={`Chapter ${index + 1}: ${page.title || 'Untitled'}`}
+                        aria-label={`Select Chapter ${index + 1}`}
+                        className={`w-9 h-9 sm:w-10 sm:h-10 rounded-sm flex items-center justify-center text-xs font-mono font-bold transition-all cursor-pointer ${
+                          isActive
+                            ? 'bg-[#EBE8E0] dark:bg-[#2D2D29] border-l-2 border-[#3A3A36] dark:border-[#ECE9E2] text-[#1A1A1A] dark:text-[#ECE9E2] shadow-2xs'
+                            : 'text-[#8A8882] dark:text-[#9E9B95] hover:bg-[#EBE8E0]/70 dark:hover:bg-[#252521] hover:text-[#1A1A1A] dark:hover:text-[#ECE9E2]'
+                        }`}
+                      >
+                        {pageNumStr}
+                      </button>
+                    );
+                  })}
+                </div>
+
+                {/* Bottom Rail Actions */}
+                <div className="pt-2 border-t border-[#E5E1D8] dark:border-[#2E2E2A] flex flex-col items-center gap-2 shrink-0 w-full px-1">
+                  <button
+                    id="sidebar-add-page-btn-rail"
+                    onClick={async () => {
+                      await handleAddNewPage();
+                    }}
+                    title="Add Page"
+                    aria-label="Add Page"
+                    className="w-9 h-9 sm:w-10 sm:h-10 rounded-sm bg-[#EBE8E0] hover:bg-[#3A3A36] hover:text-white dark:bg-[#282824] dark:hover:bg-[#ECE9E2] dark:hover:text-[#1A1A1A] text-[#3A3A36] dark:text-[#ECE9E2] flex items-center justify-center transition-all cursor-pointer"
+                  >
+                    <Plus className="w-4 h-4" />
+                  </button>
+
+                  <div
+                    className="p-1 flex flex-col items-center gap-1 cursor-pointer"
+                    title={`Progress: ${progressPercent}%`}
+                    onClick={() => setIsSidebarOpen(true)}
+                  >
+                    <span className="text-[9px] font-mono font-bold text-[#8A8882]">{progressPercent}%</span>
+                    <div className="w-1.5 h-6 bg-[#E5E1D8] dark:bg-[#2E2E2A] rounded-full overflow-hidden">
+                      <div
+                        className="w-full bg-[#3A3A36] dark:bg-[#ECE9E2] transition-all"
+                        style={{ height: `${progressPercent}%` }}
+                      />
+                    </div>
+                  </div>
+                </div>
+              </div>
+            )}
+          </aside>
         )}
 
         {/* ==================== MAIN EDITOR AREA ==================== */}
@@ -1007,18 +1275,16 @@ export const BookEditor: React.FC<BookEditorProps> = ({
             </div>
           ) : (
             /* ==================== STANDARD TOP BAR ==================== */
-            <div className="h-14 border-b border-[#E5E1D8] dark:border-[#2E2E2A] bg-[#F9F7F2]/90 dark:bg-[#181816]/90 backdrop-blur-sm px-3 sm:px-6 flex items-center justify-between gap-2 sm:gap-4 shrink-0">
-              <div className="flex items-center gap-2 sm:gap-3 min-w-0 flex-1">
+            <div className="h-14 border-b border-[#E5E1D8] dark:border-[#2E2E2A] bg-[#F9F7F2]/90 dark:bg-[#181816]/90 backdrop-blur-sm px-2 sm:px-4 md:px-6 flex items-center justify-between gap-1.5 sm:gap-3 shrink-0 min-w-0">
+              <div className="flex items-center gap-1.5 sm:gap-2.5 min-w-0 flex-1">
                 <button
                   id="toggle-sidebar-btn"
                   onClick={() => setIsSidebarOpen(!isSidebarOpen)}
-                  className="p-2 sm:p-1.5 min-w-[36px] min-h-[36px] flex items-center justify-center rounded-sm text-[#8A8882] hover:text-[#1A1A1A] dark:hover:text-[#ECE9E2] hover:bg-[#EBE8E0]/70 dark:hover:bg-[#282824] transition-colors cursor-pointer shrink-0"
+                  className="p-1.5 sm:p-2 min-w-[34px] sm:min-w-[36px] min-h-[34px] sm:min-h-[36px] flex items-center justify-center rounded-sm text-[#8A8882] hover:text-[#1A1A1A] dark:hover:text-[#ECE9E2] hover:bg-[#EBE8E0]/70 dark:hover:bg-[#282824] transition-colors cursor-pointer shrink-0"
                   title={isSidebarOpen ? 'Collapse Sidebar' : 'Expand Sidebar'}
+                  aria-label={isSidebarOpen ? 'Collapse Sidebar' : 'Expand Sidebar'}
                 >
-                  <Menu className="w-4 h-4 md:hidden" />
-                  <span className="hidden md:inline">
-                    {isSidebarOpen ? <ChevronLeft className="w-4 h-4" /> : <ChevronRight className="w-4 h-4" />}
-                  </span>
+                  {isSidebarOpen ? <ChevronLeft className="w-4 h-4" /> : <ChevronRight className="w-4 h-4" />}
                 </button>
 
                 {/* Page Title Editable Input */}
@@ -1028,16 +1294,16 @@ export const BookEditor: React.FC<BookEditorProps> = ({
                   value={pageTitle}
                   onChange={(e) => handleTitleChange(e.target.value)}
                   placeholder="Chapter Title..."
-                  className="font-serif italic font-bold text-sm sm:text-base md:text-lg text-[#1A1A1A] dark:text-[#ECE9E2] bg-transparent border-b border-transparent hover:border-[#DCD8CF] dark:hover:border-[#383834] focus:border-[#3A3A36] dark:focus:border-[#ECE9E2] focus:outline-none px-1 py-0.5 max-w-xs sm:max-w-md w-full truncate transition-all"
+                  className="font-serif italic font-bold text-xs sm:text-sm md:text-base text-[#1A1A1A] dark:text-[#ECE9E2] bg-transparent border-b border-transparent hover:border-[#DCD8CF] dark:hover:border-[#383834] focus:border-[#3A3A36] dark:focus:border-[#ECE9E2] focus:outline-none px-1 py-0.5 min-w-0 flex-1 truncate transition-all"
                 />
               </div>
 
               {/* Right Status Badges & Action Controls */}
-              <div className="flex items-center gap-1.5 sm:gap-3 shrink-0">
+              <div className="flex items-center gap-1 sm:gap-2 shrink-0">
                 {/* Sync Status Badge */}
                 <div
                   id="sync-status-indicator"
-                  className="hidden md:flex items-center gap-2 px-3 py-1 bg-[#EBE8E0] dark:bg-[#282824] rounded-full border border-[#DCD8CF] dark:border-[#383834] text-[10px] font-bold uppercase tracking-tight text-[#6B6964] dark:text-[#A8A59E]"
+                  className="hidden xl:flex items-center gap-1.5 px-2.5 py-1 bg-[#EBE8E0] dark:bg-[#282824] rounded-full border border-[#DCD8CF] dark:border-[#383834] text-[10px] font-bold uppercase tracking-tight text-[#6B6964] dark:text-[#A8A59E] shrink-0"
                 >
                   {syncStatus === 'syncing' && (
                     <>
@@ -1063,39 +1329,42 @@ export const BookEditor: React.FC<BookEditorProps> = ({
                 <button
                   id="ai-assistant-toggle-btn"
                   onClick={toggleAiPanel}
-                  className={`p-2 sm:py-1.5 sm:px-3 min-h-[36px] text-[10px] font-bold uppercase tracking-widest rounded-sm transition-all shadow-xs flex items-center gap-1.5 cursor-pointer ${
+                  className={`p-1.5 sm:py-1.5 sm:px-2.5 min-h-[34px] sm:min-h-[36px] text-[10px] font-bold uppercase tracking-wider rounded-sm transition-all flex items-center gap-1 sm:gap-1.5 cursor-pointer shrink-0 ${
                     isAiPanelOpen
                       ? 'bg-[#3A3A36] text-white dark:bg-[#ECE9E2] dark:text-[#181816] shadow-sm'
                       : 'bg-[#EBE8E0] dark:bg-[#282824] hover:bg-[#3A3A36] hover:text-white dark:hover:bg-[#ECE9E2] dark:hover:text-[#1A1A1A] text-[#3A3A36] dark:text-[#ECE9E2]'
                   }`}
                   title={isAiPanelOpen ? 'Hide MYNOOK AI Assistant' : 'Open MYNOOK AI Assistant'}
+                  aria-label="MYNOOK AI Assistant"
                 >
-                  <Wand2 className="w-3.5 h-3.5 text-[#C5A059]" />
-                  <span className="hidden xs:inline">MYNOOK AI</span>
+                  <Wand2 className="w-3.5 h-3.5 text-[#C5A059] shrink-0" />
+                  <span className="hidden sm:inline">MYNOOK AI</span>
                 </button>
 
                 {/* Focus Mode Button */}
                 <button
                   id="focus-mode-toggle-btn"
                   onClick={() => setIsFocusMode(true)}
-                  className="p-2 sm:py-1.5 sm:px-3 min-h-[36px] bg-[#EBE8E0] dark:bg-[#282824] hover:bg-[#3A3A36] hover:text-white dark:hover:bg-[#ECE9E2] dark:hover:text-[#1A1A1A] text-[#3A3A36] dark:text-[#ECE9E2] text-[10px] font-bold uppercase tracking-widest rounded-sm transition-colors shadow-xs flex items-center gap-1.5 cursor-pointer"
+                  className="p-1.5 sm:py-1.5 sm:px-2.5 min-h-[34px] sm:min-h-[36px] bg-[#EBE8E0] dark:bg-[#282824] hover:bg-[#3A3A36] hover:text-white dark:hover:bg-[#ECE9E2] dark:hover:text-[#1A1A1A] text-[#3A3A36] dark:text-[#ECE9E2] text-[10px] font-bold uppercase tracking-wider rounded-sm transition-colors flex items-center gap-1 sm:gap-1.5 cursor-pointer shrink-0"
                   title="Enter Focus Mode (Distraction-Free Writing)"
+                  aria-label="Focus Mode"
                 >
-                  <Sparkles className="w-3.5 h-3.5 text-[#C5A059]" />
-                  <span className="hidden sm:inline">Focus</span>
+                  <Sparkles className="w-3.5 h-3.5 text-[#C5A059] shrink-0" />
+                  <span className="hidden md:inline">Focus</span>
                 </button>
 
                 {/* Export Dropdown Menu (PDF & EPUB) */}
-                <div className="relative" ref={exportMenuRef}>
+                <div className="relative shrink-0" ref={exportMenuRef}>
                   <button
                     id="editor-export-btn"
                     onClick={() => setIsExportMenuOpen(!isExportMenuOpen)}
-                    className="p-2 sm:py-1.5 sm:px-3 min-h-[36px] bg-[#3A3A36] dark:bg-[#ECE9E2] text-white dark:text-[#1A1A1A] text-[10px] font-bold uppercase tracking-widest rounded-sm hover:bg-black dark:hover:bg-white transition-colors shadow-sm flex items-center gap-1 cursor-pointer"
+                    className="p-1.5 sm:py-1.5 sm:px-2.5 min-h-[34px] sm:min-h-[36px] bg-[#3A3A36] dark:bg-[#ECE9E2] text-white dark:text-[#1A1A1A] text-[10px] font-bold uppercase tracking-wider rounded-sm hover:bg-black dark:hover:bg-white transition-colors flex items-center gap-1 cursor-pointer shrink-0"
                     title="Export Manuscript"
+                    aria-label="Export Manuscript"
                   >
-                    <Download className="w-3.5 h-3.5" />
-                    <span className="hidden xs:inline">Export</span>
-                    <ChevronDown className="w-3 h-3 ml-0.5 opacity-70" />
+                    <Download className="w-3.5 h-3.5 shrink-0" />
+                    <span className="hidden sm:inline">Export</span>
+                    <ChevronDown className="w-3 h-3 opacity-70 shrink-0" />
                   </button>
 
                   {isExportMenuOpen && (
@@ -1134,8 +1403,9 @@ export const BookEditor: React.FC<BookEditorProps> = ({
                 <button
                   id="fullscreen-toggle-btn"
                   onClick={() => setIsFullscreen(!isFullscreen)}
-                  className="p-2 sm:p-1.5 min-w-[36px] min-h-[36px] flex items-center justify-center rounded-sm text-[#8A8882] hover:text-[#1A1A1A] dark:hover:text-[#ECE9E2] hover:bg-[#EBE8E0]/70 dark:hover:bg-[#282824] transition-colors cursor-pointer"
+                  className="p-1.5 min-w-[34px] sm:min-w-[36px] min-h-[34px] sm:min-h-[36px] flex items-center justify-center rounded-sm text-[#8A8882] hover:text-[#1A1A1A] dark:hover:text-[#ECE9E2] hover:bg-[#EBE8E0]/70 dark:hover:bg-[#282824] transition-colors cursor-pointer shrink-0"
                   title={isFullscreen ? 'Exit Fullscreen' : 'Fullscreen'}
+                  aria-label={isFullscreen ? 'Exit Fullscreen' : 'Fullscreen'}
                 >
                   {isFullscreen ? <Minimize2 className="w-4 h-4" /> : <Maximize2 className="w-4 h-4" />}
                 </button>
