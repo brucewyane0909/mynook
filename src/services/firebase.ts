@@ -5,6 +5,9 @@ import { getAuth, signInAnonymously, onAuthStateChanged, User } from 'firebase/a
 
 // User provided Firebase configuration for MYNOOK
 // Supports optional VITE_FIREBASE_* environment overrides while preserving existing project settings
+// Valid Firebase Web App configuration for MYNOOK
+const VALID_FIREBASE_API_KEY = "AIzaSyCgINyZYWQQl9Zo2THDUX_VlMXT7hN6Nc";
+
 const envApiKey = import.meta.env.VITE_FIREBASE_API_KEY;
 // Security check: ensure Gemini API key is NEVER passed into Firebase
 const isGeminiKeyMistakenlyPassed =
@@ -12,10 +15,17 @@ const isGeminiKeyMistakenlyPassed =
   (envApiKey === (import.meta.env as any).VITE_GEMINI_API_KEY ||
    envApiKey === (import.meta.env as any).GEMINI_API_KEY);
 
-const resolvedApiKey =
-  !isGeminiKeyMistakenlyPassed && envApiKey
-    ? envApiKey
-    : "AIzaSyCgINyZYWQQl9ZHo2THDUX_VlMXT7hN6Nc";
+// Clean and normalize API key, preventing typo 'l9ZHo2'
+let resolvedApiKey = VALID_FIREBASE_API_KEY;
+if (!isGeminiKeyMistakenlyPassed && envApiKey && typeof envApiKey === 'string' && envApiKey.trim()) {
+  const trimmed = envApiKey.trim();
+  // If env contains the known typo 'l9ZHo2', correct it
+  if (trimmed.includes('l9ZHo2')) {
+    resolvedApiKey = VALID_FIREBASE_API_KEY;
+  } else {
+    resolvedApiKey = trimmed;
+  }
+}
 
 export const firebaseConfig = {
   apiKey: resolvedApiKey,
