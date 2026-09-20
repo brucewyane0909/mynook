@@ -35,6 +35,7 @@ import {
   AlertTriangle,
   FileText,
   BookOpen,
+  Wand2,
 } from 'lucide-react';
 import { Book, BookPage, SyncStatus, EditorFont, EditorFontSize } from '../types';
 import {
@@ -46,6 +47,8 @@ import {
   fetchLiveWritingState,
 } from '../services/storage';
 import { getAutoCorrection } from '../utils/spelling';
+import { AiAssistantPanel } from './AiAssistantPanel';
+import { AiSuggestion } from '../services/aiService';
 
 interface BookEditorProps {
   book: Book;
@@ -117,6 +120,172 @@ export const BookEditor: React.FC<BookEditorProps> = ({
   currentPageIdRef.current = currentPageId;
   currentContentRef.current = contentHtml;
   currentTitleRef.current = pageTitle;
+
+  // MYNOOK AI Assistant State & Selection Tracking
+  const [isAiPanelOpen, setIsAiPanelOpen] = useState<boolean>(() => {
+    if (typeof window !== 'undefined') {
+      const saved = localStorage.getItem('mynook_ai_panel_open');
+      if (saved !== null) return saved === 'true';
+      return window.innerWidth >= 1280;
+    }
+    return false;
+  });
+  const [selectedText, setSelectedText] = useState<string>('');
+  const savedSelectionRangeRef = useRef<Range | null>(null);
+
+  const toggleAiPanel = () => {
+    setIsAiPanelOpen((prev) => {
+      const next = !prev;
+      localStorage.setItem('mynook_ai_panel_open', String(next));
+      return next;
+    });
+  };
+
+  // Monitor selection within editor canvas
+  const handleEditorSelectionChange = useCallback(() => {
+    const sel = window.getSelection();
+    if (!sel || sel.rangeCount === 0) return;
+    if (editorRef.current && editorRef.current.contains(sel.anchorNode)) {
+      const text = sel.toString().trim();
+      if (text) {
+        setSelectedText(text);
+        try {
+          savedSelectionRangeRef.current = sel.getRangeAt(0).cloneRange();
+        } catch {
+          // ignore
+        }
+      }
+    }
+  }, []);
+
+  useEffect(() => {
+    document.addEventListener('selectionchange', handleEditorSelectionChange);
+    return () => {
+      document.removeEventListener('selectionchange', handleEditorSelectionChange);
+    };
+  }, [handleEditorSelectionChange]);
+
+  // Helper to update editor content and schedule sync
+  const handleContentUpdate = (newHtml: string) => {
+    setContentHtml(newHtml);
+    currentContentRef.current = newHtml;
+    updateCounts(newHtml);
+    scheduleSync(pageTitle, newHtml);
+  };
+
+  // Handle AI textual revision applications
+  const handleApplyAiSuggestion = (suggestion: AiSuggestion) => {
+    if (!editorRef.current) return;
+
+    if (suggestion.target === 'title') {
+      handleTitleChange(suggestion.suggestedText);
+      flushCurrentWriting();
+      return;
+    }
+
+    const currentHtml = editorRef.current.innerHTML;
+
+    // 1. Try exact replacement if originalText is known
+    if (suggestion.originalText && currentHtml.includes(suggestion.originalText)) {
+      const updated = currentHtml.replace(suggestion.originalText, suggestion.suggestedText);
+      editorRef.current.innerHTML = updated;
+      handleContentUpdate(updated);
+      flushCurrentWriting();
+      setSelectedText('');
+      return;
+    }
+
+    // 2. Try restoring the saved range if valid
+    if (savedSelectionRangeRef.current) {
+      try {
+        const sel = window.getSelection();
+        if (sel) {
+          sel.removeAllRanges();
+          sel.addRange(savedSelectionRangeRef.current);
+          document.execCommand('insertText', false, suggestion.suggestedText);
+          const updated = editorRef.current.innerHTML;
+          handleContentUpdate(updated);
+          flushCurrentWriting();
+          setSelectedText('');
+          return;
+        }
+      } catch (err) {
+        console.warn('Selection replacement failed:', err);
+      }
+    }
+
+    // 3. Try replacing active selectedText
+    if (selectedText && currentHtml.includes(selectedText)) {
+      const updated = currentHtml.replace(selectedText, suggestion.suggestedText);
+      editorRef.current.innerHTML = updated;
+      handleContentUpdate(updated);
+      flushCurrentWriting();
+      setSelectedText('');
+      return;
+    }
+
+    // 4. Fallback: replace or append whole chapter if target is chapter
+    if (suggestion.target === 'chapter') {
+      const formatted = `<p>${suggestion.suggestedText.replace(/\n\n/g, '</p><p>')}</p>`;
+      editorRef.current.innerHTML = formatted;
+      handleContentUpdate(formatted);
+      flushCurrentWriting();
+    }
+  };
+
+  const handleReplaceSelection = (newText: string) => {
+    if (!editorRef.current) return;
+    const currentHtml = editorRef.current.innerHTML;
+
+    if (selectedText && currentHtml.includes(selectedText)) {
+      const updated = currentHtml.replace(selectedText, newText);
+      editorRef.current.innerHTML = updated;
+      handleContentUpdate(updated);
+      flushCurrentWriting();
+      setSelectedText('');
+      return;
+    }
+
+    if (savedSelectionRangeRef.current) {
+      try {
+        const sel = window.getSelection();
+        if (sel) {
+          sel.removeAllRanges();
+          sel.addRange(savedSelectionRangeRef.current);
+          document.execCommand('insertText', false, newText);
+          const updated = editorRef.current.innerHTML;
+          handleContentUpdate(updated);
+          flushCurrentWriting();
+          setSelectedText('');
+          return;
+        }
+      } catch (err) {
+        console.warn('Range replace failed:', err);
+      }
+    }
+
+    // If no selection, append paragraph
+    const appended = currentHtml + `<p>${newText}</p>`;
+    editorRef.current.innerHTML = appended;
+    handleContentUpdate(appended);
+    flushCurrentWriting();
+  };
+
+  const handleCreateChapterFromAi = async (title: string, content?: string) => {
+    await flushCurrentWriting();
+    const nextPageNumber = pages.length + 1;
+    const newPage = await createPageInFirestore(book.id, {
+      title: title || `Chapter ${nextPageNumber}`,
+      content: content ? `<p>${content.replace(/\n\n/g, '</p><p>')}</p>` : '<p></p>',
+      pageNumber: nextPageNumber,
+    });
+    const updated = [...pages, newPage];
+    setPages(updated);
+    setCurrentPageId(newPage.id);
+    setPageTitle(newPage.title);
+    setContentHtml(newPage.content);
+    updateCounts(newPage.content);
+  };
 
   // Calculate live word and character counts
   const updateCounts = (text: string) => {
@@ -890,6 +1059,21 @@ export const BookEditor: React.FC<BookEditorProps> = ({
                   )}
                 </div>
 
+                {/* MYNOOK AI Assistant Toggle Button */}
+                <button
+                  id="ai-assistant-toggle-btn"
+                  onClick={toggleAiPanel}
+                  className={`p-2 sm:py-1.5 sm:px-3 min-h-[36px] text-[10px] font-bold uppercase tracking-widest rounded-sm transition-all shadow-xs flex items-center gap-1.5 cursor-pointer ${
+                    isAiPanelOpen
+                      ? 'bg-[#3A3A36] text-white dark:bg-[#ECE9E2] dark:text-[#181816] shadow-sm'
+                      : 'bg-[#EBE8E0] dark:bg-[#282824] hover:bg-[#3A3A36] hover:text-white dark:hover:bg-[#ECE9E2] dark:hover:text-[#1A1A1A] text-[#3A3A36] dark:text-[#ECE9E2]'
+                  }`}
+                  title={isAiPanelOpen ? 'Hide MYNOOK AI Assistant' : 'Open MYNOOK AI Assistant'}
+                >
+                  <Wand2 className="w-3.5 h-3.5 text-[#C5A059]" />
+                  <span className="hidden xs:inline">MYNOOK AI</span>
+                </button>
+
                 {/* Focus Mode Button */}
                 <button
                   id="focus-mode-toggle-btn"
@@ -1232,6 +1416,21 @@ export const BookEditor: React.FC<BookEditorProps> = ({
             </div>
           </footer>
         </section>
+
+        {/* ==================== RIGHT-SIDE AI ASSISTANT PANEL ==================== */}
+        <AiAssistantPanel
+          isOpen={isAiPanelOpen}
+          onClose={() => setIsAiPanelOpen(false)}
+          book={book}
+          pages={pages}
+          currentPage={activePageIndex >= 0 ? pages[activePageIndex] : null}
+          currentChapterNumber={currentChapterNum}
+          selectedText={selectedText}
+          onClearSelectedText={() => setSelectedText('')}
+          onApplySuggestion={handleApplyAiSuggestion}
+          onReplaceSelection={handleReplaceSelection}
+          onCreateChapterFromAi={handleCreateChapterFromAi}
+        />
       </div>
 
       {/* Delete Confirmation Modal */}
