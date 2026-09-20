@@ -3,12 +3,41 @@ import { GoogleGenAI, Type } from '@google/genai';
 // Lazy client singleton
 let geminiClient: GoogleGenAI | null = null;
 
+// Safe API Key extraction and sanitization helper
+function getCleanApiKey(): string {
+  const rawKey =
+    process.env.GEMINI_API_KEY ||
+    process.env.GOOGLE_API_KEY ||
+    process.env.GOOGLE_GENAI_API_KEY;
+
+  if (!rawKey) return '';
+
+  let key = String(rawKey).trim();
+  // Strip surrounding quotes
+  while (
+    (key.startsWith('"') && key.endsWith('"')) ||
+    (key.startsWith("'") && key.endsWith("'"))
+  ) {
+    key = key.slice(1, -1).trim();
+  }
+  // Strip accidental key name prefix if pasted into Vercel value field
+  if (key.startsWith('GEMINI_API_KEY=')) {
+    key = key.substring('GEMINI_API_KEY='.length).trim();
+    while (
+      (key.startsWith('"') && key.endsWith('"')) ||
+      (key.startsWith("'") && key.endsWith("'"))
+    ) {
+      key = key.slice(1, -1).trim();
+    }
+  }
+  return key;
+}
+
 function getGeminiClient(): GoogleGenAI {
-  const rawKey = process.env.GEMINI_API_KEY;
-  const apiKey = rawKey ? rawKey.replace(/^["']|["']$/g, '').trim() : '';
+  const apiKey = getCleanApiKey();
   if (!apiKey) {
     throw new Error(
-      'GEMINI_API_KEY is not configured in environment variables. Please verify GEMINI_API_KEY in Vercel Project Settings -> Environment Variables.'
+      'GEMINI_API_KEY is missing on the server. Please verify GEMINI_API_KEY in Vercel Project Settings -> Environment Variables and redeploy.'
     );
   }
   if (!geminiClient) {
