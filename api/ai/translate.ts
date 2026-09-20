@@ -37,13 +37,10 @@ function getGeminiClient(): GoogleGenAI {
   const apiKey = getCleanApiKey();
   if (!apiKey) {
     throw new Error(
-      'GEMINI_API_KEY is missing on the server. Please verify GEMINI_API_KEY in Vercel Project Settings -> Environment Variables and redeploy.'
+      'GEMINI_API_KEY is missing on the server. Please configure GEMINI_API_KEY in Vercel Project Settings -> Environment Variables and redeploy.'
     );
   }
-  if (!geminiClient) {
-    geminiClient = new GoogleGenAI({ apiKey });
-  }
-  return geminiClient;
+  return new GoogleGenAI({ apiKey });
 }
 
 function setCorsHeaders(res: any) {
@@ -115,19 +112,15 @@ async function parseRequestBody(req: any): Promise<any> {
   });
 }
 
+// Supported Gemini models with automatic fallback
 const CANDIDATE_MODELS = [
-  'gemini-2.5-flash',
-  'gemini-2.0-flash',
-  'gemini-1.5-flash',
   'gemini-3.5-flash',
-  'gemini-3.5-flash-lite',
-  'gemini-2.5-pro',
-  'gemini-2.0-flash-lite',
-  'gemini-flash-latest',
-  'gemini-3.7-flash',
-  'gemini-3.8-flash',
   'gemini-3.6-flash',
+  'gemini-3.7-flash',
+  'gemini-3.5-flash-lite',
   'gemini-flash-lite-latest',
+  'gemini-flash-latest',
+  'gemini-3.8-flash',
 ];
 
 export default async function handler(req: any, res: any) {
