@@ -1,11 +1,9 @@
 import express from 'express';
 import path from 'path';
 import { createServer as createViteServer } from 'vite';
-import {
-  handleHealthRequest,
-  handleAiChatRequest,
-  handleTranslateRequest,
-} from './api/_lib/gemini';
+import healthHandler from './api/health.ts';
+import chatHandler from './api/ai/chat.ts';
+import translateHandler from './api/ai/translate.ts';
 
 const app = express();
 const PORT = 3000;
@@ -13,13 +11,13 @@ const PORT = 3000;
 app.use(express.json({ limit: '10mb' }));
 
 // API health route
-app.get('/api/health', (req, res) => handleHealthRequest(req, res));
+app.get('/api/health', (req, res) => healthHandler(req, res));
 
 // POST /api/ai and /api/ai/chat - Streaming SSE and standard chat endpoint
-app.post(['/api/ai', '/api/ai/chat'], (req, res) => handleAiChatRequest(req, res));
+app.post(['/api/ai', '/api/ai/chat'], (req, res) => chatHandler(req, res));
 
 // POST /api/ai/translate - Dedicated literary translation endpoint
-app.post('/api/ai/translate', (req, res) => handleTranslateRequest(req, res));
+app.post('/api/ai/translate', (req, res) => translateHandler(req, res));
 
 async function startServer() {
   if (process.env.NODE_ENV !== 'production') {
@@ -42,4 +40,3 @@ async function startServer() {
 }
 
 startServer();
-

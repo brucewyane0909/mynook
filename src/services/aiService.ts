@@ -111,7 +111,11 @@ export function streamAiChat(options: StreamChatOptions): () => void {
         let errMessage = 'Gemini API request failed. Check the server configuration.';
         try {
           const errData = await response.json();
-          if (errData.error) errMessage = errData.error;
+          if (errData.details) {
+            errMessage = `${errData.error || 'Gemini request failed'}: ${errData.details}`;
+          } else if (errData.error) {
+            errMessage = errData.error;
+          }
         } catch {
           // ignore
         }
@@ -160,7 +164,8 @@ export function streamAiChat(options: StreamChatOptions): () => void {
               options.onDone(data.fullText || accumulatedText);
             } else if (data.type === 'error') {
               hasDoneOrErrorCalled = true;
-              options.onError(data.error || 'Gemini API request failed. Check the server configuration.');
+              const errMsg = data.details ? `${data.error || 'Gemini request failed'}: ${data.details}` : (data.error || 'Gemini API request failed. Check the server configuration.');
+              options.onError(errMsg);
             }
           } catch (parseErr) {
             console.warn('SSE JSON parse error:', parseErr);
